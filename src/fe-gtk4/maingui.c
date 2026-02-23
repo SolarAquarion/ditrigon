@@ -1882,8 +1882,6 @@ fe_gtk4_session_switch_to (session *sess)
 		return;
 
 	prev = current_tab;
-	if (prev && prev != sess)
-		fe_gtk4_xtext_save_scroll_position (prev);
 	current_sess = sess;
 	current_tab = sess;
 	if (sess->server)
