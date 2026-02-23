@@ -30,18 +30,10 @@ typedef struct
 
 typedef struct
 {
-	GString *plain;
-	GArray *raw_map; /* guint byte offset in raw text for each plain byte (+sentinel at end). */
-} HcVisibleMap;
-
-typedef struct
-{
 	GtkWidget *scroll;
 	GtkWidget *view;
 } HcSessionWidget;
 
-#define HC_WRAP_RIGHT_PAD_PX 8
-#define HC_WRAP_MIN_CONTENT_PX 80
 #define HC_STICKY_BOTTOM_EPSILON_PX 70.0
 #define HC_PREFIX_MAX_CHARS 32
 #define HC_PREFIX_MAX_WORDS 2
@@ -76,6 +68,7 @@ static GtkTextTag *tag_italic;
 static GtkTextTag *tag_underline;
 static GtkTextTag *tag_link_hover;
 static GtkTextTag *tag_nick_column;
+static GtkTextTag *tag_message_hanging;
 static GtkTextTag *tag_font;
 static PangoFontDescription *xtext_font_desc;
 static int xtext_space_width_px;
@@ -93,15 +86,12 @@ static double xtext_secondary_pending_y;
 static guint xtext_resize_tick_id;
 static guint xtext_resize_idle_id;
 static guint xtext_scroll_to_end_idle_id;
-static guint xtext_restore_anchor_idle_id;
-static gboolean xtext_resize_rerendering;
 static int xtext_last_view_width;
 static session *xtext_render_session;
 static GtkWidget *xtext_stack;
 static GtkWidget *xtext_empty_scroll;
 static GtkWidget *xtext_empty_view;
 static GtkWidget *xtext_scroll_to_end_view;
-static GtkWidget *xtext_restore_anchor_view;
 static session *xtext_scroll_to_end_replay_session;
 static int xtext_scroll_debug_enabled_cached = -1;
 
@@ -116,10 +106,6 @@ static HcSessionWidget *session_widget_ensure (session *sess);
 static void session_buffer_mark_all_dirty (void);
 static gboolean xtext_view_is_at_end (GtkWidget *view);
 static gboolean xtext_should_stick_to_end (void);
-static void xtext_save_anchor_from_view (GtkWidget *view, GtkTextBuffer *buf);
-static void xtext_restore_view_from_anchor (GtkWidget *view, GtkTextBuffer *buf);
-static void xtext_restore_anchor_idle_finish (void);
-static void xtext_restore_anchor_idle_cancel (void);
 static void xtext_scroll_to_end_idle_finish (void);
 static void xtext_scroll_to_end_idle_cancel (void);
 static void xtext_scroll_to_end_for_replay (session *sess);
@@ -212,7 +198,7 @@ xtext_scroll_debug_log_state (const char *event, session *sess, GtkWidget *view,
 		}
 	}
 
-	g_debug ("xtext-scroll:%s sess=%p(%s) view=%p mapped=%d width=%d adj=%.1f/%.1f..%.1f page=%.1f bottom=%.1f dist=%.1f anchor=%d end=%d idle_end=%u idle_anchor=%u",
+	g_debug ("xtext-scroll:%s sess=%p(%s) view=%p mapped=%d width=%d adj=%.1f/%.1f..%.1f page=%.1f bottom=%.1f dist=%.1f anchor=%d end=%d idle_end=%u",
 		event ? event : "-",
 		(gpointer) sess,
 		xtext_scroll_debug_session_label (sess),
@@ -227,8 +213,7 @@ xtext_scroll_debug_log_state (const char *event, session *sess, GtkWidget *view,
 		distance,
 		anchor_offset,
 		end_offset,
-		xtext_scroll_to_end_idle_id,
-		xtext_restore_anchor_idle_id);
+		xtext_scroll_to_end_idle_id);
 }
 
 static gboolean
@@ -296,21 +281,17 @@ xtext_session_has_nick (session *sess, const char *nick)
 }
 
 static gboolean
-xtext_extract_nick_token (session *sess, const char *token, gsize *start_out, gsize *end_out, char **nick_out)
+xtext_trim_nick_token_bounds (const char *token, const char **start_out, const char **end_out)
 {
 	const char *start_ptr;
-	const char *nick_start;
 	const char *end_ptr;
-	char *nick;
 
 	if (start_out)
-		*start_out = 0;
+		*start_out = NULL;
 	if (end_out)
-		*end_out = 0;
-	if (nick_out)
-		*nick_out = NULL;
+		*end_out = NULL;
 
-	if (!sess || !is_session (sess) || !token || !token[0])
+	if (!token || !token[0])
 		return FALSE;
 
 	start_ptr = token;
@@ -345,33 +326,112 @@ xtext_extract_nick_token (session *sess, const char *token, gsize *start_out, gs
 	if (end_ptr <= start_ptr)
 		return FALSE;
 
-	nick_start = start_ptr;
-	nick = g_strndup (nick_start, (gsize) (end_ptr - nick_start));
-	if (!nick[0])
+	if (start_out)
+		*start_out = start_ptr;
+	if (end_out)
+		*end_out = end_ptr;
+
+	return TRUE;
+}
+
+static gboolean
+xtext_is_plausible_nick_char (gunichar ch, gboolean is_first)
+{
+	if (g_unichar_isalnum (ch))
+		return TRUE;
+	if (ch > 0x7f)
+		return TRUE;
+
+	switch (ch)
 	{
-		g_free (nick);
+	case '[':
+	case ']':
+	case '\\':
+	case '`':
+	case '_':
+	case '^':
+	case '{':
+	case '}':
+	case '|':
+		return TRUE;
+	case '-':
+		return is_first ? FALSE : TRUE;
+	default:
 		return FALSE;
 	}
+}
 
-	if (!xtext_session_has_nick (sess, nick))
+static gboolean
+xtext_is_plausible_nick (const char *nick)
+{
+	const char *p;
+	const char *end;
+	gboolean is_first;
+
+	if (!nick || !nick[0])
+		return FALSE;
+
+	p = nick;
+	end = nick + strlen (nick);
+	is_first = TRUE;
+	while (p < end)
 	{
-		g_free (nick);
-		nick = NULL;
+		gunichar ch;
+		const char *next;
 
-		if (strchr (HC_NICK_PREFIXES, *nick_start) != NULL)
+		ch = g_utf8_get_char (p);
+		if (!xtext_is_plausible_nick_char (ch, is_first))
+			return FALSE;
+
+		next = g_utf8_next_char (p);
+		p = next > p ? next : p + 1;
+		is_first = FALSE;
+	}
+
+	return TRUE;
+}
+
+static gboolean
+xtext_extract_nick_token_relaxed (const char *token, gsize *start_out, gsize *end_out, char **nick_out)
+{
+	const char *start_ptr;
+	const char *nick_start;
+	const char *end_ptr;
+	char *nick;
+
+	if (start_out)
+		*start_out = 0;
+	if (end_out)
+		*end_out = 0;
+	if (nick_out)
+		*nick_out = NULL;
+
+	if (!token || !token[0])
+		return FALSE;
+
+	if (!xtext_trim_nick_token_bounds (token, &start_ptr, &end_ptr))
+		return FALSE;
+
+	nick_start = start_ptr;
+	nick = g_strndup (nick_start, (gsize) (end_ptr - nick_start));
+	if (!xtext_is_plausible_nick (nick))
+		g_clear_pointer (&nick, g_free);
+
+	if (!nick && strchr (HC_NICK_PREFIXES, *nick_start) != NULL)
+	{
+		const char *next;
+
+		next = g_utf8_next_char (nick_start);
+		if (next < end_ptr)
 		{
-			const char *next;
-
-			next = g_utf8_next_char (nick_start);
-			if (next < end_ptr)
-			{
-				nick_start = next;
-				nick = g_strndup (nick_start, (gsize) (end_ptr - nick_start));
-			}
+			nick_start = next;
+			nick = g_strndup (nick_start, (gsize) (end_ptr - nick_start));
+			if (!xtext_is_plausible_nick (nick))
+				g_clear_pointer (&nick, g_free);
 		}
 	}
 
-	if (!nick || !nick[0] || !xtext_session_has_nick (sess, nick))
+	if (!nick)
 	{
 		g_free (nick);
 		return FALSE;
@@ -389,6 +449,154 @@ xtext_extract_nick_token (session *sess, const char *token, gsize *start_out, gs
 	return TRUE;
 }
 
+static void
+xtext_consider_session_nick_candidate (session *sess, const char *token,
+	const char *token_end, const char *start_ptr, const char *end_ptr,
+	const char **best_start, const char **best_end, char **best_nick,
+	int *best_score, gsize *best_len)
+{
+	const char *candidate_start;
+	int pass;
+
+	if (!sess || !is_session (sess) || !token || !token_end || !start_ptr || !end_ptr ||
+		end_ptr <= start_ptr || !best_start || !best_end || !best_nick ||
+		!best_score || !best_len)
+		return;
+
+	candidate_start = start_ptr;
+	for (pass = 0; pass < 2; pass++)
+	{
+		char *nick;
+		gsize len;
+		int score;
+		gboolean better;
+
+		if (candidate_start >= end_ptr)
+			break;
+
+		nick = g_strndup (candidate_start, (gsize) (end_ptr - candidate_start));
+		if (!xtext_is_plausible_nick (nick) || !xtext_session_has_nick (sess, nick))
+		{
+			g_free (nick);
+			nick = NULL;
+		}
+
+		if (nick)
+		{
+			len = (gsize) (end_ptr - candidate_start);
+			score = (int) ((candidate_start - token) + (token_end - end_ptr));
+			better = (!*best_nick || score < *best_score ||
+				(score == *best_score && len > *best_len));
+			if (better)
+			{
+				g_free (*best_nick);
+				*best_nick = nick;
+				*best_start = candidate_start;
+				*best_end = end_ptr;
+				*best_len = len;
+				*best_score = score;
+			}
+			else
+			{
+				g_free (nick);
+			}
+		}
+
+		if (pass > 0 || strchr (HC_NICK_PREFIXES, *candidate_start) == NULL)
+			break;
+
+		candidate_start = g_utf8_next_char (candidate_start);
+	}
+
+	return;
+}
+
+static gboolean
+xtext_extract_nick_token (session *sess, const char *token, gsize *start_out, gsize *end_out, char **nick_out)
+{
+	const char *token_end;
+	const char *start_ptr;
+	const char *best_start;
+	const char *best_end;
+	char *best_nick;
+	gsize best_len;
+	int best_score;
+
+	if (start_out)
+		*start_out = 0;
+	if (end_out)
+		*end_out = 0;
+	if (nick_out)
+		*nick_out = NULL;
+
+	if (!sess || !is_session (sess) || !token || !token[0])
+		return FALSE;
+
+	token_end = token + strlen (token);
+	start_ptr = token;
+	best_start = NULL;
+	best_end = NULL;
+	best_nick = NULL;
+	best_len = 0;
+	best_score = G_MAXINT;
+
+	for (;;)
+	{
+		const char *end_ptr;
+
+		end_ptr = token_end;
+		for (;;)
+		{
+			const char *prev;
+			gunichar ch;
+
+			xtext_consider_session_nick_candidate (sess, token, token_end, start_ptr, end_ptr,
+				&best_start, &best_end, &best_nick, &best_score, &best_len);
+
+			if (end_ptr <= start_ptr)
+				break;
+
+			prev = g_utf8_find_prev_char (token, end_ptr);
+			if (!prev)
+				break;
+
+			ch = g_utf8_get_char (prev);
+			if (!xtext_is_nick_trail_delim (ch))
+				break;
+
+			end_ptr = prev;
+		}
+
+		{
+			gunichar ch;
+			const char *next;
+
+			ch = g_utf8_get_char (start_ptr);
+			if (!xtext_is_nick_lead_delim (ch) && strchr (HC_NICK_PREFIXES, *start_ptr) == NULL)
+				break;
+
+			next = g_utf8_next_char (start_ptr);
+			if (next <= start_ptr || next >= token_end)
+				break;
+			start_ptr = next;
+		}
+	}
+
+	if (!best_nick)
+		return FALSE;
+
+	if (start_out)
+		*start_out = (gsize) (best_start - token);
+	if (end_out)
+		*end_out = (gsize) (best_end - token);
+	if (nick_out)
+		*nick_out = best_nick;
+	else
+		g_free (best_nick);
+
+	return TRUE;
+}
+
 static gboolean
 xtext_prefix_has_nick (session *sess, const char *prefix, gsize len)
 {
@@ -398,7 +606,7 @@ xtext_prefix_has_nick (session *sess, const char *prefix, gsize len)
 	char *nick;
 	gboolean has_nick;
 
-	if (!sess || !is_session (sess) || !prefix || len == 0)
+	if (!prefix || len == 0)
 		return FALSE;
 
 	clean = strip_color (prefix, (int) len, STRIP_ALL);
@@ -417,69 +625,41 @@ xtext_prefix_has_nick (session *sess, const char *prefix, gsize len)
 	candidate = (candidate && candidate[1]) ? (candidate + 1) : trimmed;
 
 	nick = NULL;
-	has_nick = xtext_extract_nick_token (sess, candidate, NULL, NULL, &nick);
+	has_nick = (sess && is_session (sess)) ?
+		xtext_extract_nick_token (sess, candidate, NULL, NULL, &nick) : FALSE;
+	if (!has_nick)
+		has_nick = xtext_extract_nick_token_relaxed (candidate, NULL, NULL, &nick);
 	g_free (nick);
 	g_free (clean);
 
 	return has_nick;
 }
 
-/* Check whether the iter sits at the beginning of a wrap-continuation
- * sequence inserted by xtext_render_formatted_wrapped ("\n\t\t").
- * If so, advance past the three characters and return TRUE. */
 static gboolean
-xtext_skip_wrap_forward (GtkTextIter *iter)
+xtext_range_touches_tag (const GtkTextIter *start, const GtkTextIter *end, GtkTextTag *tag)
 {
 	GtkTextIter probe;
-	gunichar ch;
+	GtkTextIter start_iter;
+	GtkTextIter end_iter;
 
-	probe = *iter;
-	ch = gtk_text_iter_get_char (&probe);
-	if (ch != '\n')
+	if (!tag || !start || !end)
 		return FALSE;
-	if (!gtk_text_iter_forward_char (&probe))
+	start_iter = *start;
+	end_iter = *end;
+	if (gtk_text_iter_compare (&start_iter, &end_iter) >= 0)
 		return FALSE;
-	ch = gtk_text_iter_get_char (&probe);
-	if (ch != '\t')
-		return FALSE;
-	if (!gtk_text_iter_forward_char (&probe))
-		return FALSE;
-	ch = gtk_text_iter_get_char (&probe);
-	if (ch != '\t')
-		return FALSE;
-	if (!gtk_text_iter_forward_char (&probe))
-		return FALSE;
-	*iter = probe;
-	return TRUE;
-}
 
-/* Check whether the iter sits just after a wrap-continuation sequence
- * ("\n\t\t").  If so, move backward past those three characters and
- * return TRUE. */
-static gboolean
-xtext_skip_wrap_backward (GtkTextIter *iter)
-{
-	GtkTextIter probe;
-	gunichar ch;
+	probe = start_iter;
+	if (gtk_text_iter_has_tag (&probe, tag))
+		return TRUE;
 
-	probe = *iter;
+	probe = end_iter;
 	if (!gtk_text_iter_backward_char (&probe))
 		return FALSE;
-	ch = gtk_text_iter_get_char (&probe);
-	if (ch != '\t')
+	if (gtk_text_iter_compare (&probe, &start_iter) < 0)
 		return FALSE;
-	if (!gtk_text_iter_backward_char (&probe))
-		return FALSE;
-	ch = gtk_text_iter_get_char (&probe);
-	if (ch != '\t')
-		return FALSE;
-	if (!gtk_text_iter_backward_char (&probe))
-		return FALSE;
-	ch = gtk_text_iter_get_char (&probe);
-	if (ch != '\n')
-		return FALSE;
-	*iter = probe;
-	return TRUE;
+
+	return gtk_text_iter_has_tag (&probe, tag);
 }
 
 static char *
@@ -492,9 +672,7 @@ xtext_token_at_point (GtkTextView *view, double x, double y, GtkTextIter *start_
 	int buffer_y;
 	GtkTextBuffer *buffer;
 	gunichar ch;
-	char *raw_word;
-	GString *clean;
-	const char *p;
+	char *token;
 
 	if (!view)
 		return NULL;
@@ -524,82 +702,37 @@ xtext_token_at_point (GtkTextView *view, double x, double y, GtkTextIter *start_
 
 	for (;;)
 	{
-		if (gtk_text_iter_starts_line (&start))
-		{
-			GtkTextIter probe = start;
+		GtkTextIter prev;
+		gunichar prev_ch;
 
-			if (!xtext_skip_wrap_backward (&probe))
-				break;
-			start = probe;
-			continue;
-		}
-		else
-		{
-			GtkTextIter prev;
-			gunichar prev_ch;
-
-			prev = start;
-			if (!gtk_text_iter_backward_char (&prev))
-				break;
-			prev_ch = gtk_text_iter_get_char (&prev);
-			if (xtext_is_space_char (prev_ch))
-				break;
-			start = prev;
-		}
+		prev = start;
+		if (!gtk_text_iter_backward_char (&prev))
+			break;
+		prev_ch = gtk_text_iter_get_char (&prev);
+		if (xtext_is_space_char (prev_ch))
+			break;
+		start = prev;
 	}
 
 	for (;;)
 	{
-		if (gtk_text_iter_ends_line (&end))
-		{
-			GtkTextIter probe = end;
+		gunichar next_ch;
 
-			if (!xtext_skip_wrap_forward (&probe))
-				break;
-			end = probe;
-			continue;
-		}
-		else
-		{
-			gunichar next_ch;
-
-			next_ch = gtk_text_iter_get_char (&end);
-			if (xtext_is_space_char (next_ch))
-				break;
-			if (!gtk_text_iter_forward_char (&end))
-				break;
-		}
+		next_ch = gtk_text_iter_get_char (&end);
+		if (xtext_is_space_char (next_ch))
+			break;
+		if (!gtk_text_iter_forward_char (&end))
+			break;
 	}
 
 	if (gtk_text_iter_compare (&start, &end) >= 0)
 		return NULL;
 
 	buffer = gtk_text_view_get_buffer (view);
-	raw_word = gtk_text_buffer_get_text (buffer, &start, &end, FALSE);
-	if (!raw_word || !raw_word[0])
+	token = gtk_text_buffer_get_text (buffer, &start, &end, FALSE);
+	if (!token || !token[0])
 	{
-		g_free (raw_word);
-		return NULL;
-	}
-
-	/* Strip wrap-continuation sequences ("\n\t\t") so the caller
-	 * sees a single contiguous token. */
-	clean = g_string_new (NULL);
-	for (p = raw_word; *p; )
-	{
-		if (p[0] == '\n' && p[1] == '\t' && p[2] == '\t')
-		{
-			p += 3;
-			continue;
-		}
-		g_string_append_c (clean, *p);
-		p++;
-	}
-	g_free (raw_word);
-
-	if (clean->len == 0)
-	{
-		g_string_free (clean, TRUE);
+		g_free (token);
 		return NULL;
 	}
 
@@ -608,35 +741,7 @@ xtext_token_at_point (GtkTextView *view, double x, double y, GtkTextIter *start_
 	if (end_out)
 		*end_out = end;
 
-	return g_string_free (clean, FALSE);
-}
-
-/* Advance a buffer iter by n_chars visible characters, skipping over
- * any wrap-continuation sequences ("\n\t\t") in the buffer. */
-static void
-xtext_iter_forward_chars_skip_wrap (GtkTextIter *iter, int n_chars)
-{
-	int i;
-
-	for (i = 0; i < n_chars; i++)
-	{
-		gunichar ch;
-
-		ch = gtk_text_iter_get_char (iter);
-		if (ch == '\n')
-		{
-			GtkTextIter probe = *iter;
-
-			if (xtext_skip_wrap_forward (&probe))
-			{
-				*iter = probe;
-				i--;
-				continue;
-			}
-		}
-		if (!gtk_text_iter_forward_char (iter))
-			break;
-	}
+	return token;
 }
 
 static void
@@ -684,6 +789,15 @@ xtext_classify_at_point (GtkTextView *view, session *sess, double x, double y, i
 		target = nick_target;
 		nick_target = NULL;
 	}
+	else if (type == 0 && xtext_range_touches_tag (&token_start, &token_end, tag_nick_column) &&
+		xtext_extract_nick_token_relaxed (token, &nick_start, &nick_end, &nick_target))
+	{
+		type = WORD_NICK;
+		start = (int) nick_start;
+		end = (int) nick_end;
+		target = nick_target;
+		nick_target = NULL;
+	}
 
 	if (type == 0 && sess && sess->type == SESS_DIALOG)
 		type = WORD_DIALOG;
@@ -721,8 +835,8 @@ xtext_classify_at_point (GtkTextView *view, session *sess, double x, double y, i
 		match_end = token_start;
 		start_chars = g_utf8_pointer_to_offset (token, token + start);
 		end_chars = g_utf8_pointer_to_offset (token, token + end);
-		xtext_iter_forward_chars_skip_wrap (&match_start, start_chars);
-		xtext_iter_forward_chars_skip_wrap (&match_end, end_chars);
+		gtk_text_iter_forward_chars (&match_start, start_chars);
+		gtk_text_iter_forward_chars (&match_end, end_chars);
 		if (match_start_out)
 			*match_start_out = match_start;
 		if (match_end_out)
@@ -836,35 +950,7 @@ xtext_link_hover_set (const GtkTextIter *start, const GtkTextIter *end)
 		return;
 
 	xtext_link_hover_clear ();
-
-	/* Apply the tag in segments, skipping wrap-continuation sequences
-	 * ("\n\t\t") so the indent tabs don't get underlined. */
-	{
-		GtkTextIter seg_start = start_iter;
-		GtkTextIter cursor = start_iter;
-
-		while (gtk_text_iter_compare (&cursor, &end_iter) < 0)
-		{
-			GtkTextIter probe = cursor;
-			if (xtext_skip_wrap_forward (&probe))
-			{
-				/* cursor is at '\n'; apply tag for text before it */
-				if (gtk_text_iter_compare (&seg_start, &cursor) < 0)
-					gtk_text_buffer_apply_tag (log_buffer, tag_link_hover,
-						&seg_start, &cursor);
-				/* Skip past "\n\t\t" */
-				cursor = probe;
-				seg_start = cursor;
-			}
-			else
-			{
-				gtk_text_iter_forward_char (&cursor);
-			}
-		}
-		/* Apply tag for the remaining segment */
-		if (gtk_text_iter_compare (&seg_start, &end_iter) < 0)
-			gtk_text_buffer_apply_tag (log_buffer, tag_link_hover, &seg_start, &end_iter);
-	}
+	gtk_text_buffer_apply_tag (log_buffer, tag_link_hover, &start_iter, &end_iter);
 
 	xtext_hover_start_mark = gtk_text_buffer_create_mark (log_buffer, NULL, &start_iter, TRUE);
 	xtext_hover_end_mark = gtk_text_buffer_create_mark (log_buffer, NULL, &end_iter, FALSE);
@@ -1254,6 +1340,7 @@ static void
 xtext_create_shared_tag_table (void)
 {
 	GdkRGBA stamp_rgba;
+	GdkRGBA nick_rgba;
 
 	if (shared_tag_table)
 		return;
@@ -1268,8 +1355,15 @@ xtext_create_shared_tag_table (void)
 		"underline", PANGO_UNDERLINE_SINGLE, NULL);
 	tag_link_hover = xtext_create_tag_in_table (shared_tag_table, "hc-link-hover",
 		"underline", PANGO_UNDERLINE_SINGLE, NULL);
+	xtext_color_to_rgba (18, &nick_rgba);
 	tag_nick_column = xtext_create_tag_in_table (shared_tag_table, "hc-nick-column",
-		"weight", PANGO_WEIGHT_SEMIBOLD, NULL);
+		"weight", PANGO_WEIGHT_SEMIBOLD,
+		"foreground-rgba", &nick_rgba,
+		NULL);
+	tag_message_hanging = xtext_create_tag_in_table (shared_tag_table, "hc-message-hanging",
+		"left-margin", 0,
+		"indent", 0,
+		NULL);
 	tag_font = xtext_create_tag_in_table (shared_tag_table, "hc-font", NULL);
 
 	xtext_color_to_rgba (COL_FG, &stamp_rgba);
@@ -1395,21 +1489,6 @@ xtext_measure_plain_width (const char *text, gsize len)
 	g_free (tmp);
 
 	return width;
-}
-
-static int
-xtext_message_wrap_width_px (void)
-{
-	int avail;
-
-	if (!log_view || !prefs.hex_text_wordwrap || xtext_message_col_px <= 0)
-		return 0;
-
-	avail = gtk_widget_get_width (log_view) - xtext_message_col_px - HC_WRAP_RIGHT_PAD_PX;
-	if (avail < HC_WRAP_MIN_CONTENT_PX)
-		return 0;
-
-	return avail;
 }
 
 static gboolean
@@ -1644,6 +1723,14 @@ xtext_set_message_tab_stop (int msg_px, int stamp_px)
 	PangoTabArray *tabs;
 	int nick_right_px;
 
+	if (tag_message_hanging)
+	{
+		if (msg_px > 0)
+			g_object_set (tag_message_hanging, "left-margin", 5, "indent", -msg_px, NULL);
+		else
+			g_object_set (tag_message_hanging, "left-margin", 0, "indent", 0, NULL);
+	}
+
 	if (!log_view)
 		return;
 
@@ -1670,128 +1757,6 @@ xtext_set_message_tab_stop (int msg_px, int stamp_px)
 	pango_tab_array_free (tabs);
 	xtext_stamp_col_px = stamp_px;
 	xtext_message_col_px = msg_px;
-}
-
-static HcVisibleMap *
-xtext_visible_map_build (const char *text, gsize len)
-{
-	HcVisibleMap *map;
-	const char *p;
-	const char *end;
-
-	map = g_new0 (HcVisibleMap, 1);
-	map->plain = g_string_sized_new (len ? len : 8);
-	map->raw_map = g_array_sized_new (FALSE, FALSE, sizeof (guint), len + 1);
-
-	p = text;
-	end = text + len;
-	while (p < end)
-	{
-		unsigned char ch;
-		const char *next;
-
-		ch = (unsigned char) *p;
-		switch (ch)
-		{
-		case HC_IRC_CTRL_BOLD:
-		case HC_IRC_CTRL_ITALIC:
-		case HC_IRC_CTRL_UNDERLINE:
-		case HC_IRC_CTRL_REVERSE:
-		case HC_IRC_CTRL_RESET:
-		case HC_IRC_CTRL_BELL:
-			p++;
-			continue;
-		case HC_IRC_CTRL_COLOR:
-		{
-			int dummy;
-			gsize j;
-
-			j = (gsize) ((p + 1) - text);
-			if (xtext_parse_color_number (text, len, &j, &dummy))
-			{
-				if (j < len && text[j] == ',')
-				{
-					j++;
-					(void) xtext_parse_color_number (text, len, &j, &dummy);
-				}
-			}
-			p = text + j;
-			continue;
-		}
-		case HC_IRC_CTRL_HEX_COLOR:
-		{
-			gsize j;
-
-			j = (gsize) ((p + 1) - text);
-			while (j < len && (g_ascii_isxdigit (text[j]) || text[j] == ','))
-				j++;
-			p = text + j;
-			continue;
-		}
-		case '\t':
-		{
-			guint pos;
-
-			pos = (guint) (p - text);
-			g_string_append_c (map->plain, ' ');
-			g_array_append_val (map->raw_map, pos);
-			p++;
-			continue;
-		}
-		default:
-			break;
-		}
-
-		if (ch < HC_ASCII_PRINTABLE_MIN)
-		{
-			p++;
-			continue;
-		}
-
-		{
-			gsize char_len;
-			gsize k;
-			gsize offset;
-
-			next = g_utf8_next_char (p);
-			char_len = (gsize) (next - p);
-			if (char_len == 0 || p + char_len > end)
-				char_len = 1;
-
-			offset = (gsize) (p - text);
-			g_string_append_len (map->plain, p, char_len);
-			for (k = 0; k < char_len; k++)
-			{
-				guint pos;
-
-				pos = (guint) (offset + k);
-				g_array_append_val (map->raw_map, pos);
-			}
-			p += char_len;
-		}
-	}
-
-	{
-		guint end_pos;
-
-		end_pos = (guint) len;
-		g_array_append_val (map->raw_map, end_pos);
-	}
-
-	return map;
-}
-
-static void
-xtext_visible_map_free (HcVisibleMap *map)
-{
-	if (!map)
-		return;
-
-	if (map->plain)
-		g_string_free (map->plain, TRUE);
-	if (map->raw_map)
-		g_array_free (map->raw_map, TRUE);
-	g_free (map);
 }
 
 static void
@@ -1932,8 +1897,7 @@ xtext_parse_color_number (const char *text, gsize len, gsize *index, int *value)
 }
 
 static void
-xtext_render_formatted_stateful (GtkTextBuffer *buf, GtkTextIter *iter, const char *text, gsize len, GtkTextTag *layout_tag,
-	HcTextStyle *style_io)
+xtext_render_formatted_stateful (GtkTextBuffer *buf, GtkTextIter *iter, const char *text, gsize len, GtkTextTag *layout_tag)
 {
 	HcTextStyle style;
 	gsize i;
@@ -1942,10 +1906,7 @@ xtext_render_formatted_stateful (GtkTextBuffer *buf, GtkTextIter *iter, const ch
 	if (!text || len == 0)
 		return;
 
-	if (style_io)
-		style = *style_io;
-	else
-		xtext_reset_style (&style);
+	xtext_reset_style (&style);
 	seg_start = 0;
 	i = 0;
 
@@ -2067,98 +2028,12 @@ xtext_render_formatted_stateful (GtkTextBuffer *buf, GtkTextIter *iter, const ch
 
 	if (i > seg_start)
 		xtext_insert_segment (buf, iter, text + seg_start, i - seg_start, &style, layout_tag);
-
-	if (style_io)
-		*style_io = style;
 }
 
 static void
 xtext_render_formatted (GtkTextBuffer *buf, GtkTextIter *iter, const char *text, gsize len, GtkTextTag *layout_tag)
 {
-	xtext_render_formatted_stateful (buf, iter, text, len, layout_tag, NULL);
-}
-
-static void
-xtext_render_formatted_wrapped (GtkTextBuffer *buf, GtkTextIter *iter, const char *text, gsize len, GtkTextTag *layout_tag)
-{
-	int wrap_width;
-	HcVisibleMap *map;
-	PangoLayout *layout;
-	int line_count;
-	int line_idx;
-	gsize raw_start;
-	HcTextStyle style;
-	GtkWidget *measure_view;
-
-	wrap_width = xtext_message_wrap_width_px ();
-	if (wrap_width <= 0 || !text || len == 0)
-	{
-		xtext_render_formatted (buf, iter, text, len, layout_tag);
-		return;
-	}
-
-	map = xtext_visible_map_build (text, len);
-	if (!map || map->plain->len == 0)
-	{
-		xtext_visible_map_free (map);
-		xtext_render_formatted (buf, iter, text, len, layout_tag);
-		return;
-	}
-
-	measure_view = log_view ? log_view : xtext_empty_view;
-	if (!measure_view)
-	{
-		xtext_visible_map_free (map);
-		xtext_render_formatted (buf, iter, text, len, layout_tag);
-		return;
-	}
-
-	layout = gtk_widget_create_pango_layout (measure_view, map->plain->str);
-	if (xtext_font_desc)
-		pango_layout_set_font_description (layout, xtext_font_desc);
-	pango_layout_set_wrap (layout, PANGO_WRAP_WORD_CHAR);
-	pango_layout_set_width (layout, wrap_width * PANGO_SCALE);
-
-	line_count = pango_layout_get_line_count (layout);
-	if (line_count <= 1)
-	{
-		g_object_unref (layout);
-		xtext_visible_map_free (map);
-		xtext_render_formatted (buf, iter, text, len, layout_tag);
-		return;
-	}
-
-	raw_start = 0;
-	xtext_reset_style (&style);
-	for (line_idx = 1; line_idx < line_count; line_idx++)
-	{
-		PangoLayoutLine *line;
-		int start_index;
-		gsize raw_break;
-
-		line = pango_layout_get_line_readonly (layout, line_idx);
-		if (!line)
-			continue;
-		start_index = line->start_index;
-		if (start_index <= 0 || (gsize) start_index >= map->raw_map->len)
-			continue;
-
-		raw_break = g_array_index (map->raw_map, guint, (gsize) start_index);
-		if (raw_break <= raw_start || raw_break > len)
-			continue;
-
-		xtext_render_formatted_stateful (buf, iter, text + raw_start, raw_break - raw_start, layout_tag, &style);
-		xtext_insert_plain_char (buf, iter, '\n');
-		xtext_insert_plain_char (buf, iter, '\t');
-		xtext_insert_plain_char (buf, iter, '\t');
-		raw_start = raw_break;
-	}
-
-	if (raw_start < len)
-		xtext_render_formatted_stateful (buf, iter, text + raw_start, len - raw_start, layout_tag, &style);
-
-	g_object_unref (layout);
-	xtext_visible_map_free (map);
+	xtext_render_formatted_stateful (buf, iter, text, len, layout_tag);
 }
 
 static void
@@ -2167,9 +2042,18 @@ xtext_render_line (GtkTextBuffer *buf, GtkTextIter *iter, const char *line, gsiz
 	HcLineColumns cols;
 	session *render_sess;
 	GtkTextTag *prefix_tag;
+	GtkTextMark *line_start_mark;
+	GtkTextMark *line_end_mark;
+	GtkTextIter tag_start;
+	GtkTextIter tag_end;
 
 	if (!buf || !iter)
 		return;
+
+	line_start_mark = NULL;
+	line_end_mark = NULL;
+	if (tag_message_hanging)
+		line_start_mark = gtk_text_buffer_create_mark (buf, NULL, iter, TRUE);
 
 	xtext_split_line_columns (line, len, &cols);
 	if (cols.has_columns)
@@ -2177,31 +2061,23 @@ xtext_render_line (GtkTextBuffer *buf, GtkTextIter *iter, const char *line, gsiz
 		if (cols.stamp && cols.stamp_len > 0)
 			xtext_insert_plain_text (buf, iter, cols.stamp, cols.stamp_len, TRUE);
 
-		if (cols.prefix && cols.prefix_len > 0)
+		xtext_insert_plain_char (buf, iter, '\t');
+
+		if (cols.prefix_len > 0)
 		{
-			/* Tab 0 (PANGO_TAB_RIGHT): right-aligns the nick within its column */
-			xtext_insert_plain_char (buf, iter, '\t');
 			render_sess = xtext_render_session;
 			if (!render_sess || !is_session (render_sess))
 				render_sess = current_tab;
 			prefix_tag = NULL;
-			if (tag_nick_column && render_sess && xtext_prefix_has_nick (render_sess, cols.prefix, cols.prefix_len))
+			if (tag_nick_column && xtext_prefix_has_nick (render_sess, cols.prefix, cols.prefix_len))
 				prefix_tag = tag_nick_column;
 			xtext_render_formatted (buf, iter, cols.prefix, cols.prefix_len, prefix_tag);
 		}
 
 		if (cols.body && cols.body_len > 0)
 		{
-			/* When there is no prefix, we still need to advance past
-			 * tab 0 (the right-aligned nick tab) to reach tab 1. */
-			if (!cols.prefix || cols.prefix_len == 0)
-				xtext_insert_plain_char (buf, iter, '\t');
-			/* Tab 1 (PANGO_TAB_LEFT): body starts at the message column */
 			xtext_insert_plain_char (buf, iter, '\t');
-			if (prefs.hex_text_wordwrap)
-				xtext_render_formatted_wrapped (buf, iter, cols.body, cols.body_len, NULL);
-			else
-				xtext_render_formatted (buf, iter, cols.body, cols.body_len, NULL);
+			xtext_render_formatted (buf, iter, cols.body, cols.body_len, NULL);
 		}
 	}
 	else
@@ -2209,6 +2085,25 @@ xtext_render_line (GtkTextBuffer *buf, GtkTextIter *iter, const char *line, gsiz
 
 	if (append_newline)
 		xtext_insert_plain_char (buf, iter, '\n');
+
+	if (cols.has_columns && line_start_mark && tag_message_hanging)
+	{
+		GtkTextIter end_iter;
+
+		end_iter = *iter;
+		if (append_newline)
+			gtk_text_iter_backward_char (&end_iter);
+		line_end_mark = gtk_text_buffer_create_mark (buf, NULL, &end_iter, FALSE);
+		gtk_text_buffer_get_iter_at_mark (buf, &tag_start, line_start_mark);
+		gtk_text_buffer_get_iter_at_mark (buf, &tag_end, line_end_mark);
+		if (gtk_text_iter_compare (&tag_start, &tag_end) < 0)
+			gtk_text_buffer_apply_tag (buf, tag_message_hanging, &tag_start, &tag_end);
+	}
+
+	if (line_start_mark)
+		gtk_text_buffer_delete_mark (buf, line_start_mark);
+	if (line_end_mark)
+		gtk_text_buffer_delete_mark (buf, line_end_mark);
 }
 
 static void
@@ -2520,200 +2415,6 @@ xtext_should_stick_to_end (void)
 }
 
 static void
-xtext_save_anchor_from_view (GtkWidget *view, GtkTextBuffer *buf)
-{
-	GtkTextMark *anchor;
-	GtkTextMark *end_mark;
-	GtkTextIter iter;
-	int bx;
-	int by;
-
-	if (!view || !buf)
-	{
-		xtext_scroll_debug_log_state ("anchor-save-skip-no-view-or-buffer",
-			current_tab, view, buf);
-		return;
-	}
-
-	anchor = gtk_text_buffer_get_mark (buf, "anchor");
-	if (!anchor)
-	{
-		xtext_scroll_debug_log_state ("anchor-save-skip-no-anchor-mark",
-			current_tab, view, buf);
-		return;
-	}
-
-	if (xtext_view_is_at_end (view))
-	{
-		end_mark = gtk_text_buffer_get_mark (buf, "end");
-		if (end_mark)
-		{
-			gtk_text_buffer_get_iter_at_mark (buf, &iter, end_mark);
-			gtk_text_buffer_move_mark (buf, anchor, &iter);
-			xtext_scroll_debug_log_state ("anchor-save-pin-to-end",
-				current_tab, view, buf);
-		}
-		else
-		{
-			xtext_scroll_debug_log_state ("anchor-save-end-mark-missing",
-				current_tab, view, buf);
-		}
-		return;
-	}
-
-	if (!gtk_widget_get_mapped (view) || gtk_widget_get_width (view) <= 0)
-	{
-		xtext_scroll_debug_log_state ("anchor-save-skip-not-mapped",
-			current_tab, view, buf);
-		return;
-	}
-
-	gtk_text_view_window_to_buffer_coords (GTK_TEXT_VIEW (view),
-		GTK_TEXT_WINDOW_WIDGET, 0, 0, &bx, &by);
-	if (gtk_text_view_get_iter_at_location (GTK_TEXT_VIEW (view), &iter, bx, by))
-	{
-		gtk_text_buffer_move_mark (buf, anchor, &iter);
-		xtext_scroll_debug_log_state ("anchor-save-top-visible",
-			current_tab, view, buf);
-	}
-	else
-	{
-		xtext_scroll_debug_log_state ("anchor-save-no-iter-at-location",
-			current_tab, view, buf);
-	}
-}
-
-static void
-xtext_restore_anchor_idle_finish (void)
-{
-	xtext_scroll_debug_log_state ("anchor-restore-idle-finish", current_tab,
-		xtext_restore_anchor_view,
-		xtext_restore_anchor_view ?
-			gtk_text_view_get_buffer (GTK_TEXT_VIEW (xtext_restore_anchor_view)) : NULL);
-	xtext_restore_anchor_idle_id = 0;
-	xtext_restore_anchor_view = NULL;
-}
-
-static void
-xtext_restore_anchor_idle_cancel (void)
-{
-	xtext_scroll_debug_log_state ("anchor-restore-idle-cancel", current_tab,
-		xtext_restore_anchor_view,
-		xtext_restore_anchor_view ?
-			gtk_text_view_get_buffer (GTK_TEXT_VIEW (xtext_restore_anchor_view)) : NULL);
-	if (xtext_restore_anchor_idle_id != 0)
-		g_source_remove (xtext_restore_anchor_idle_id);
-	xtext_restore_anchor_idle_finish ();
-}
-
-static gboolean
-xtext_restore_anchor_idle_cb (gpointer data)
-{
-	GtkTextView *view = GTK_TEXT_VIEW (data);
-	GtkTextBuffer *buf;
-	GtkTextMark *anchor;
-	GtkTextIter iter;
-	GtkAdjustment *vadj;
-	int line_y;
-	double lower;
-	double upper;
-	double page;
-	double bottom;
-	double target;
-
-	xtext_scroll_debug_log_state ("anchor-restore-idle-enter", current_tab,
-		GTK_WIDGET (view), view ? gtk_text_view_get_buffer (view) : NULL);
-
-	if (!view || GTK_WIDGET (view) != log_view)
-	{
-		xtext_scroll_debug_log_state ("anchor-restore-idle-drop-not-active", current_tab,
-			GTK_WIDGET (view), view ? gtk_text_view_get_buffer (view) : NULL);
-		xtext_restore_anchor_idle_finish ();
-		return G_SOURCE_REMOVE;
-	}
-
-	if (!gtk_widget_get_mapped (GTK_WIDGET (view)) ||
-		gtk_widget_get_width (GTK_WIDGET (view)) <= 0)
-	{
-		xtext_scroll_debug_log_state ("anchor-restore-idle-wait-mapped", current_tab,
-			GTK_WIDGET (view), gtk_text_view_get_buffer (view));
-		return G_SOURCE_CONTINUE;
-	}
-
-	buf = gtk_text_view_get_buffer (view);
-	anchor = gtk_text_buffer_get_mark (buf, "anchor");
-	if (!anchor)
-	{
-		xtext_scroll_debug_log_state ("anchor-restore-idle-no-anchor-mark", current_tab,
-			GTK_WIDGET (view), buf);
-		xtext_restore_anchor_idle_finish ();
-		return G_SOURCE_REMOVE;
-	}
-
-	gtk_text_buffer_get_iter_at_mark (buf, &iter, anchor);
-	vadj = gtk_scrollable_get_vadjustment (GTK_SCROLLABLE (view));
-	if (vadj)
-	{
-		gtk_text_view_get_line_yrange (view, &iter, &line_y, NULL);
-		lower = gtk_adjustment_get_lower (vadj);
-		upper = gtk_adjustment_get_upper (vadj);
-		page = gtk_adjustment_get_page_size (vadj);
-		bottom = MAX (lower, upper - page);
-		target = CLAMP ((double) line_y, lower, bottom);
-		gtk_adjustment_set_value (vadj, target);
-		xtext_scroll_debug_log_state ("anchor-restore-idle-set-adjustment", current_tab,
-			GTK_WIDGET (view), buf);
-	}
-	else
-	{
-		xtext_scroll_debug_log_state ("anchor-restore-idle-no-adjustment", current_tab,
-			GTK_WIDGET (view), buf);
-	}
-
-	gtk_text_view_scroll_mark_onscreen (view, anchor);
-	xtext_scroll_debug_log_state ("anchor-restore-idle-scroll-mark", current_tab,
-		GTK_WIDGET (view), buf);
-	xtext_restore_anchor_idle_finish ();
-	return G_SOURCE_REMOVE;
-}
-
-static void
-xtext_restore_view_from_anchor (GtkWidget *view, GtkTextBuffer *buf)
-{
-	GtkTextMark *anchor;
-
-	if (!view || !buf)
-	{
-		xtext_scroll_debug_log_state ("anchor-restore-schedule-skip-no-view-or-buffer",
-			current_tab, view, buf);
-		return;
-	}
-
-	anchor = gtk_text_buffer_get_mark (buf, "anchor");
-	if (!anchor)
-	{
-		xtext_scroll_debug_log_state ("anchor-restore-schedule-skip-no-anchor-mark",
-			current_tab, view, buf);
-		return;
-	}
-
-	if (xtext_restore_anchor_idle_id != 0)
-	{
-		if (xtext_restore_anchor_view == view)
-		{
-			xtext_scroll_debug_log_state ("anchor-restore-schedule-coalesce-same-view",
-				current_tab, view, buf);
-			return;
-		}
-		xtext_restore_anchor_idle_cancel ();
-	}
-
-	xtext_restore_anchor_view = view;
-	xtext_restore_anchor_idle_id = g_idle_add (xtext_restore_anchor_idle_cb, view);
-	xtext_scroll_debug_log_state ("anchor-restore-scheduled", current_tab, view, buf);
-}
-
-static void
 xtext_show_session_rendered (session *sess)
 {
 	HcSessionWidget *widget;
@@ -2781,8 +2482,6 @@ xtext_show_session_rendered (session *sess)
 
 	if (is_empty || buffer_dirty)
 	{
-		if (xtext_resize_rerendering && !first_show)
-			xtext_save_anchor_from_view (widget->view, buf);
 		xtext_render_session = sess;
 		xtext_render_raw_all (buf, (log && log->len > 0) ? log->str : "");
 		xtext_render_session = NULL;
@@ -2793,8 +2492,6 @@ xtext_show_session_rendered (session *sess)
 				sess, widget->view, buf);
 			xtext_scroll_to_end ();
 		}
-		else if (xtext_resize_rerendering)
-			xtext_restore_view_from_anchor (widget->view, buf);
 	}
 	else
 	{
@@ -2831,11 +2528,7 @@ xtext_resize_refresh_idle_cb (gpointer user_data)
 	if (!xtext_stack || !current_tab || !is_session (current_tab))
 		return G_SOURCE_REMOVE;
 
-	/* Force re-render to recalculate word-wrap for the new width. */
-	session_buffer_mark_all_dirty ();
-	xtext_resize_rerendering = TRUE;
-	xtext_show_session_rendered (current_tab);
-	xtext_resize_rerendering = FALSE;
+	/* GtkTextView wrapping updates with allocation changes. */
 	return G_SOURCE_REMOVE;
 }
 
@@ -2994,13 +2687,10 @@ fe_gtk4_xtext_init (void)
 	xtext_message_col_px = 0;
 	xtext_render_session = NULL;
 	xtext_scroll_to_end_idle_id = 0;
-	xtext_restore_anchor_idle_id = 0;
-	xtext_resize_rerendering = FALSE;
 	xtext_stack = NULL;
 	xtext_empty_scroll = NULL;
 	xtext_empty_view = NULL;
 	xtext_scroll_to_end_view = NULL;
-	xtext_restore_anchor_view = NULL;
 	xtext_scroll_to_end_replay_session = NULL;
 }
 
@@ -3059,6 +2749,7 @@ fe_gtk4_xtext_cleanup (void)
 	tag_underline = NULL;
 	tag_link_hover = NULL;
 	tag_nick_column = NULL;
+	tag_message_hanging = NULL;
 	tag_font = NULL;
 	log_buffer = NULL;
 	xtext_search_mark = NULL;
@@ -3073,7 +2764,6 @@ fe_gtk4_xtext_cleanup (void)
 		g_source_remove (xtext_resize_idle_id);
 		xtext_resize_idle_id = 0;
 	}
-	xtext_restore_anchor_idle_cancel ();
 	xtext_scroll_to_end_idle_cancel ();
 	xtext_scroll_to_end_replay_session = NULL;
 	if (xtext_stack && xtext_resize_tick_id != 0)
@@ -3086,12 +2776,10 @@ fe_gtk4_xtext_cleanup (void)
 	xtext_message_col_px = 0;
 	xtext_last_view_width = -1;
 	xtext_render_session = NULL;
-	xtext_resize_rerendering = FALSE;
 	xtext_stack = NULL;
 	xtext_empty_scroll = NULL;
 	xtext_empty_view = NULL;
 	xtext_scroll_to_end_view = NULL;
-	xtext_restore_anchor_view = NULL;
 	log_view = NULL;
 	log_buffer = NULL;
 }
@@ -3114,7 +2802,6 @@ fe_gtk4_xtext_create_widget (void)
 		g_source_remove (xtext_resize_idle_id);
 		xtext_resize_idle_id = 0;
 	}
-	xtext_restore_anchor_idle_cancel ();
 	xtext_scroll_to_end_idle_cancel ();
 	xtext_last_view_width = -1;
 
@@ -3260,16 +2947,9 @@ fe_gtk4_xtext_append_for_session (session *sess, const char *text)
 		int added_stamp_px;
 
 		added_col_px = xtext_compute_message_column_px (text, &added_stamp_px);
-		if (added_col_px > xtext_message_col_px)
-		{
-			/* Re-render to apply a wider tab stop uniformly. */
-			xtext_render_raw_all (buf, log->str);
-			xtext_render_session = NULL;
-			session_buffer_set_dirty (sess, FALSE);
-			if (stick_to_end)
-				xtext_scroll_to_end ();
-			return;
-		}
+		if (added_col_px > xtext_message_col_px || added_stamp_px > xtext_stamp_col_px)
+			xtext_set_message_tab_stop (MAX (added_col_px, xtext_message_col_px),
+				MAX (added_stamp_px, xtext_stamp_col_px));
 	}
 
 	xtext_render_raw_append (buf, text);
@@ -3337,8 +3017,6 @@ fe_gtk4_xtext_remove_session (session *sess)
 		HcSessionWidget *widget;
 
 		widget = g_hash_table_lookup (session_widgets, sess);
-		if (widget && widget->view && widget->view == xtext_restore_anchor_view)
-			xtext_restore_anchor_idle_cancel ();
 		if (widget && widget->view == log_view)
 		{
 			log_view = xtext_empty_view;
