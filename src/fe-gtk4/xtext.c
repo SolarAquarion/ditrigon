@@ -66,6 +66,7 @@ static GHashTable *session_logs;
 static GHashTable *session_buffers;
 static GHashTable *session_buffers_dirty;
 static GHashTable *session_widgets;
+static GHashTable *session_shown_once;
 static GHashTable *session_replay_marklast;
 static GHashTable *color_tags;
 static GtkTextTagTable *shared_tag_table;
@@ -92,12 +93,17 @@ static double xtext_secondary_pending_y;
 static guint xtext_resize_tick_id;
 static guint xtext_resize_idle_id;
 static guint xtext_scroll_to_end_idle_id;
+static guint xtext_restore_anchor_idle_id;
+static gboolean xtext_resize_rerendering;
 static int xtext_last_view_width;
 static session *xtext_render_session;
 static GtkWidget *xtext_stack;
 static GtkWidget *xtext_empty_scroll;
 static GtkWidget *xtext_empty_view;
 static GtkWidget *xtext_scroll_to_end_view;
+static GtkWidget *xtext_restore_anchor_view;
+static session *xtext_scroll_to_end_replay_session;
+static int xtext_scroll_debug_enabled_cached = -1;
 
 static void xtext_render_raw_append (GtkTextBuffer *buf, const char *raw);
 static gboolean xtext_is_at_end (void);
@@ -108,9 +114,122 @@ static GtkTextBuffer *xtext_create_buffer_with_marks (void);
 static void xtext_setup_view_controllers (GtkWidget *view);
 static HcSessionWidget *session_widget_ensure (session *sess);
 static void session_buffer_mark_all_dirty (void);
+static gboolean xtext_view_is_at_end (GtkWidget *view);
 static gboolean xtext_should_stick_to_end (void);
+static void xtext_save_anchor_from_view (GtkWidget *view, GtkTextBuffer *buf);
+static void xtext_restore_view_from_anchor (GtkWidget *view, GtkTextBuffer *buf);
+static void xtext_restore_anchor_idle_finish (void);
+static void xtext_restore_anchor_idle_cancel (void);
 static void xtext_scroll_to_end_idle_finish (void);
 static void xtext_scroll_to_end_idle_cancel (void);
+static void xtext_scroll_to_end_for_replay (session *sess);
+static gboolean xtext_scroll_debug_enabled (void);
+static const char *xtext_scroll_debug_session_label (session *sess);
+static void xtext_scroll_debug_log_state (const char *event, session *sess,
+	GtkWidget *view, GtkTextBuffer *buf);
+
+static gboolean
+xtext_scroll_debug_enabled (void)
+{
+	const char *env;
+
+	if (xtext_scroll_debug_enabled_cached >= 0)
+		return xtext_scroll_debug_enabled_cached ? TRUE : FALSE;
+
+	env = g_getenv ("DITRIGON_XTEXT_SCROLL_DEBUG");
+	if (!env || !env[0] || g_strcmp0 (env, "0") == 0 ||
+		g_ascii_strcasecmp (env, "false") == 0 ||
+		g_ascii_strcasecmp (env, "no") == 0)
+		xtext_scroll_debug_enabled_cached = 0;
+	else
+		xtext_scroll_debug_enabled_cached = 1;
+
+	return xtext_scroll_debug_enabled_cached ? TRUE : FALSE;
+}
+
+static const char *
+xtext_scroll_debug_session_label (session *sess)
+{
+	if (!sess || !is_session (sess))
+		return "-";
+
+	if (sess->channel[0])
+		return sess->channel;
+
+	return "(server)";
+}
+
+static void
+xtext_scroll_debug_log_state (const char *event, session *sess, GtkWidget *view,
+	GtkTextBuffer *buf)
+{
+	GtkAdjustment *vadj;
+	gboolean mapped;
+	int width;
+	int anchor_offset;
+	int end_offset;
+	double value;
+	double lower;
+	double upper;
+	double page;
+	double bottom;
+	double distance;
+
+	if (!xtext_scroll_debug_enabled ())
+		return;
+
+	mapped = view ? gtk_widget_get_mapped (view) : FALSE;
+	width = view ? gtk_widget_get_width (view) : -1;
+	anchor_offset = -1;
+	end_offset = -1;
+
+	vadj = view ? gtk_scrollable_get_vadjustment (GTK_SCROLLABLE (view)) : NULL;
+	value = vadj ? gtk_adjustment_get_value (vadj) : -1.0;
+	lower = vadj ? gtk_adjustment_get_lower (vadj) : -1.0;
+	upper = vadj ? gtk_adjustment_get_upper (vadj) : -1.0;
+	page = vadj ? gtk_adjustment_get_page_size (vadj) : -1.0;
+	bottom = vadj ? MAX (lower, upper - page) : -1.0;
+	distance = vadj ? MAX (0.0, bottom - value) : -1.0;
+
+	if (buf)
+	{
+		GtkTextMark *anchor;
+		GtkTextMark *end_mark;
+		GtkTextIter iter;
+
+		anchor = gtk_text_buffer_get_mark (buf, "anchor");
+		if (anchor)
+		{
+			gtk_text_buffer_get_iter_at_mark (buf, &iter, anchor);
+			anchor_offset = gtk_text_iter_get_offset (&iter);
+		}
+
+		end_mark = gtk_text_buffer_get_mark (buf, "end");
+		if (end_mark)
+		{
+			gtk_text_buffer_get_iter_at_mark (buf, &iter, end_mark);
+			end_offset = gtk_text_iter_get_offset (&iter);
+		}
+	}
+
+	g_debug ("xtext-scroll:%s sess=%p(%s) view=%p mapped=%d width=%d adj=%.1f/%.1f..%.1f page=%.1f bottom=%.1f dist=%.1f anchor=%d end=%d idle_end=%u idle_anchor=%u",
+		event ? event : "-",
+		(gpointer) sess,
+		xtext_scroll_debug_session_label (sess),
+		(gpointer) view,
+		mapped ? 1 : 0,
+		width,
+		value,
+		lower,
+		upper,
+		page,
+		bottom,
+		distance,
+		anchor_offset,
+		end_offset,
+		xtext_scroll_to_end_idle_id,
+		xtext_restore_anchor_idle_id);
+}
 
 static gboolean
 xtext_is_space_char (gunichar ch)
@@ -2201,13 +2320,22 @@ xtext_render_raw_append (GtkTextBuffer *buf, const char *raw)
 static void
 xtext_scroll_to_end_idle_finish (void)
 {
+	xtext_scroll_debug_log_state ("scroll-end-idle-finish", current_tab,
+		xtext_scroll_to_end_view,
+		xtext_scroll_to_end_view ?
+			gtk_text_view_get_buffer (GTK_TEXT_VIEW (xtext_scroll_to_end_view)) : NULL);
 	xtext_scroll_to_end_idle_id = 0;
 	xtext_scroll_to_end_view = NULL;
+	xtext_scroll_to_end_replay_session = NULL;
 }
 
 static void
 xtext_scroll_to_end_idle_cancel (void)
 {
+	xtext_scroll_debug_log_state ("scroll-end-idle-cancel", current_tab,
+		xtext_scroll_to_end_view,
+		xtext_scroll_to_end_view ?
+			gtk_text_view_get_buffer (GTK_TEXT_VIEW (xtext_scroll_to_end_view)) : NULL);
 	if (xtext_scroll_to_end_idle_id != 0)
 		g_source_remove (xtext_scroll_to_end_idle_id);
 	xtext_scroll_to_end_idle_finish ();
@@ -2220,11 +2348,16 @@ scroll_to_end_idle (gpointer data)
 	GtkTextBuffer *buffer;
 	GtkTextMark *mark;
 
+	xtext_scroll_debug_log_state ("scroll-end-idle-enter", current_tab,
+		GTK_WIDGET (view), view ? gtk_text_view_get_buffer (view) : NULL);
+
 	/* If the requested view is no longer the active one, drop the idle.
 	 * Hidden stack children never gain a size allocation, so continuing
 	 * would spin forever. */
 	if (!view || GTK_WIDGET (view) != log_view)
 	{
+		xtext_scroll_debug_log_state ("scroll-end-idle-drop-not-active", current_tab,
+			GTK_WIDGET (view), view ? gtk_text_view_get_buffer (view) : NULL);
 		xtext_scroll_to_end_idle_finish ();
 		return G_SOURCE_REMOVE;
 	}
@@ -2234,12 +2367,29 @@ scroll_to_end_idle (gpointer data)
 	 * before it has been allocated. */
 	if (!gtk_widget_get_mapped (GTK_WIDGET (view)) ||
 		gtk_widget_get_width (GTK_WIDGET (view)) <= 0)
+	{
+		xtext_scroll_debug_log_state ("scroll-end-idle-wait-mapped", current_tab,
+			GTK_WIDGET (view), gtk_text_view_get_buffer (view));
 		return G_SOURCE_CONTINUE;
+	}
 
 	buffer = gtk_text_view_get_buffer (view);
 	mark = gtk_text_buffer_get_mark (buffer, "end");
 	if (mark)
+	{
+		xtext_scroll_debug_log_state ("scroll-end-idle-apply", current_tab,
+			GTK_WIDGET (view), buffer);
 		gtk_text_view_scroll_mark_onscreen (view, mark);
+
+		if (xtext_scroll_to_end_replay_session && session_replay_marklast)
+			g_hash_table_remove (session_replay_marklast,
+				xtext_scroll_to_end_replay_session);
+	}
+	else
+	{
+		xtext_scroll_debug_log_state ("scroll-end-idle-no-end-mark", current_tab,
+			GTK_WIDGET (view), buffer);
+	}
 
 	xtext_scroll_to_end_idle_finish ();
 	return G_SOURCE_REMOVE;
@@ -2251,28 +2401,82 @@ xtext_scroll_to_end (void)
 	GtkTextMark *mark;
 
 	if (!log_buffer || !log_view)
+	{
+		xtext_scroll_debug_log_state ("scroll-end-skip-no-view-or-buffer", current_tab,
+			log_view, log_buffer);
 		return;
+	}
 
 	mark = gtk_text_buffer_get_mark (log_buffer, "end");
 	if (!mark)
+	{
+		xtext_scroll_debug_log_state ("scroll-end-skip-no-end-mark", current_tab,
+			log_view, log_buffer);
 		return;
+	}
 
 	if (xtext_scroll_to_end_idle_id != 0)
 	{
 		if (xtext_scroll_to_end_view == log_view)
+		{
+			xtext_scroll_debug_log_state ("scroll-end-coalesce-same-view", current_tab,
+				log_view, log_buffer);
 			return;
+		}
 
 		xtext_scroll_to_end_idle_cancel ();
 	}
 
 	/* Schedule restore in idle to avoid races with widget allocation. */
 	xtext_scroll_to_end_view = log_view;
+	xtext_scroll_to_end_replay_session = NULL;
 	xtext_scroll_to_end_idle_id = g_idle_add (scroll_to_end_idle, log_view);
+	xtext_scroll_debug_log_state ("scroll-end-scheduled", current_tab, log_view, log_buffer);
+}
+
+static void
+xtext_scroll_to_end_for_replay (session *sess)
+{
+	GtkTextMark *mark;
+
+	if (!log_buffer || !log_view)
+	{
+		xtext_scroll_debug_log_state ("scroll-end-replay-skip-no-view-or-buffer", current_tab,
+			log_view, log_buffer);
+		return;
+	}
+
+	mark = gtk_text_buffer_get_mark (log_buffer, "end");
+	if (!mark)
+	{
+		xtext_scroll_debug_log_state ("scroll-end-replay-skip-no-end-mark", current_tab,
+			log_view, log_buffer);
+		return;
+	}
+
+	if (xtext_scroll_to_end_idle_id != 0)
+	{
+		if (xtext_scroll_to_end_view == log_view)
+		{
+			if (sess && !xtext_scroll_to_end_replay_session)
+				xtext_scroll_to_end_replay_session = sess;
+			xtext_scroll_debug_log_state ("scroll-end-replay-coalesce-same-view", current_tab,
+				log_view, log_buffer);
+			return;
+		}
+
+		xtext_scroll_to_end_idle_cancel ();
+	}
+
+	xtext_scroll_to_end_view = log_view;
+	xtext_scroll_to_end_replay_session = sess;
+	xtext_scroll_to_end_idle_id = g_idle_add (scroll_to_end_idle, log_view);
+	xtext_scroll_debug_log_state ("scroll-end-replay-scheduled", current_tab, log_view, log_buffer);
 }
 
 /* check if we are scrolled to the bottom */
 static gboolean
-xtext_is_at_end (void)
+xtext_view_is_at_end (GtkWidget *view)
 {
 	GtkAdjustment *vadj;
 	double lower;
@@ -2282,33 +2486,231 @@ xtext_is_at_end (void)
 	double bottom;
 	double distance;
 
-	if (log_view)
-	{
-		vadj = gtk_scrollable_get_vadjustment (GTK_SCROLLABLE (log_view));
-		if (vadj)
-		{
-			lower = gtk_adjustment_get_lower (vadj);
-			value = gtk_adjustment_get_value (vadj);
-			upper = gtk_adjustment_get_upper (vadj);
-			page = gtk_adjustment_get_page_size (vadj);
-			bottom = MAX (lower, upper - page);
-			distance = bottom - value;
-			if (distance < 0.0)
-				distance = 0.0;
-			return distance <= HC_STICKY_BOTTOM_EPSILON_PX;
-		}
-	}
+	if (!view)
+		return TRUE;
+	if (xtext_scroll_to_end_idle_id != 0 && xtext_scroll_to_end_view == view)
+		return TRUE;
 
-	return TRUE;
+	vadj = gtk_scrollable_get_vadjustment (GTK_SCROLLABLE (view));
+	if (!vadj)
+		return TRUE;
+
+	lower = gtk_adjustment_get_lower (vadj);
+	value = gtk_adjustment_get_value (vadj);
+	upper = gtk_adjustment_get_upper (vadj);
+	page = gtk_adjustment_get_page_size (vadj);
+	bottom = MAX (lower, upper - page);
+	distance = bottom - value;
+	if (distance < 0.0)
+		distance = 0.0;
+
+	return distance <= HC_STICKY_BOTTOM_EPSILON_PX;
+}
+
+static gboolean
+xtext_is_at_end (void)
+{
+	return xtext_view_is_at_end (log_view);
 }
 
 static gboolean
 xtext_should_stick_to_end (void)
 {
-	if (xtext_scroll_to_end_idle_id != 0 && xtext_scroll_to_end_view == log_view)
-		return TRUE;
-
 	return xtext_is_at_end ();
+}
+
+static void
+xtext_save_anchor_from_view (GtkWidget *view, GtkTextBuffer *buf)
+{
+	GtkTextMark *anchor;
+	GtkTextMark *end_mark;
+	GtkTextIter iter;
+	int bx;
+	int by;
+
+	if (!view || !buf)
+	{
+		xtext_scroll_debug_log_state ("anchor-save-skip-no-view-or-buffer",
+			current_tab, view, buf);
+		return;
+	}
+
+	anchor = gtk_text_buffer_get_mark (buf, "anchor");
+	if (!anchor)
+	{
+		xtext_scroll_debug_log_state ("anchor-save-skip-no-anchor-mark",
+			current_tab, view, buf);
+		return;
+	}
+
+	if (xtext_view_is_at_end (view))
+	{
+		end_mark = gtk_text_buffer_get_mark (buf, "end");
+		if (end_mark)
+		{
+			gtk_text_buffer_get_iter_at_mark (buf, &iter, end_mark);
+			gtk_text_buffer_move_mark (buf, anchor, &iter);
+			xtext_scroll_debug_log_state ("anchor-save-pin-to-end",
+				current_tab, view, buf);
+		}
+		else
+		{
+			xtext_scroll_debug_log_state ("anchor-save-end-mark-missing",
+				current_tab, view, buf);
+		}
+		return;
+	}
+
+	if (!gtk_widget_get_mapped (view) || gtk_widget_get_width (view) <= 0)
+	{
+		xtext_scroll_debug_log_state ("anchor-save-skip-not-mapped",
+			current_tab, view, buf);
+		return;
+	}
+
+	gtk_text_view_window_to_buffer_coords (GTK_TEXT_VIEW (view),
+		GTK_TEXT_WINDOW_WIDGET, 0, 0, &bx, &by);
+	if (gtk_text_view_get_iter_at_location (GTK_TEXT_VIEW (view), &iter, bx, by))
+	{
+		gtk_text_buffer_move_mark (buf, anchor, &iter);
+		xtext_scroll_debug_log_state ("anchor-save-top-visible",
+			current_tab, view, buf);
+	}
+	else
+	{
+		xtext_scroll_debug_log_state ("anchor-save-no-iter-at-location",
+			current_tab, view, buf);
+	}
+}
+
+static void
+xtext_restore_anchor_idle_finish (void)
+{
+	xtext_scroll_debug_log_state ("anchor-restore-idle-finish", current_tab,
+		xtext_restore_anchor_view,
+		xtext_restore_anchor_view ?
+			gtk_text_view_get_buffer (GTK_TEXT_VIEW (xtext_restore_anchor_view)) : NULL);
+	xtext_restore_anchor_idle_id = 0;
+	xtext_restore_anchor_view = NULL;
+}
+
+static void
+xtext_restore_anchor_idle_cancel (void)
+{
+	xtext_scroll_debug_log_state ("anchor-restore-idle-cancel", current_tab,
+		xtext_restore_anchor_view,
+		xtext_restore_anchor_view ?
+			gtk_text_view_get_buffer (GTK_TEXT_VIEW (xtext_restore_anchor_view)) : NULL);
+	if (xtext_restore_anchor_idle_id != 0)
+		g_source_remove (xtext_restore_anchor_idle_id);
+	xtext_restore_anchor_idle_finish ();
+}
+
+static gboolean
+xtext_restore_anchor_idle_cb (gpointer data)
+{
+	GtkTextView *view = GTK_TEXT_VIEW (data);
+	GtkTextBuffer *buf;
+	GtkTextMark *anchor;
+	GtkTextIter iter;
+	GtkAdjustment *vadj;
+	int line_y;
+	double lower;
+	double upper;
+	double page;
+	double bottom;
+	double target;
+
+	xtext_scroll_debug_log_state ("anchor-restore-idle-enter", current_tab,
+		GTK_WIDGET (view), view ? gtk_text_view_get_buffer (view) : NULL);
+
+	if (!view || GTK_WIDGET (view) != log_view)
+	{
+		xtext_scroll_debug_log_state ("anchor-restore-idle-drop-not-active", current_tab,
+			GTK_WIDGET (view), view ? gtk_text_view_get_buffer (view) : NULL);
+		xtext_restore_anchor_idle_finish ();
+		return G_SOURCE_REMOVE;
+	}
+
+	if (!gtk_widget_get_mapped (GTK_WIDGET (view)) ||
+		gtk_widget_get_width (GTK_WIDGET (view)) <= 0)
+	{
+		xtext_scroll_debug_log_state ("anchor-restore-idle-wait-mapped", current_tab,
+			GTK_WIDGET (view), gtk_text_view_get_buffer (view));
+		return G_SOURCE_CONTINUE;
+	}
+
+	buf = gtk_text_view_get_buffer (view);
+	anchor = gtk_text_buffer_get_mark (buf, "anchor");
+	if (!anchor)
+	{
+		xtext_scroll_debug_log_state ("anchor-restore-idle-no-anchor-mark", current_tab,
+			GTK_WIDGET (view), buf);
+		xtext_restore_anchor_idle_finish ();
+		return G_SOURCE_REMOVE;
+	}
+
+	gtk_text_buffer_get_iter_at_mark (buf, &iter, anchor);
+	vadj = gtk_scrollable_get_vadjustment (GTK_SCROLLABLE (view));
+	if (vadj)
+	{
+		gtk_text_view_get_line_yrange (view, &iter, &line_y, NULL);
+		lower = gtk_adjustment_get_lower (vadj);
+		upper = gtk_adjustment_get_upper (vadj);
+		page = gtk_adjustment_get_page_size (vadj);
+		bottom = MAX (lower, upper - page);
+		target = CLAMP ((double) line_y, lower, bottom);
+		gtk_adjustment_set_value (vadj, target);
+		xtext_scroll_debug_log_state ("anchor-restore-idle-set-adjustment", current_tab,
+			GTK_WIDGET (view), buf);
+	}
+	else
+	{
+		xtext_scroll_debug_log_state ("anchor-restore-idle-no-adjustment", current_tab,
+			GTK_WIDGET (view), buf);
+	}
+
+	gtk_text_view_scroll_mark_onscreen (view, anchor);
+	xtext_scroll_debug_log_state ("anchor-restore-idle-scroll-mark", current_tab,
+		GTK_WIDGET (view), buf);
+	xtext_restore_anchor_idle_finish ();
+	return G_SOURCE_REMOVE;
+}
+
+static void
+xtext_restore_view_from_anchor (GtkWidget *view, GtkTextBuffer *buf)
+{
+	GtkTextMark *anchor;
+
+	if (!view || !buf)
+	{
+		xtext_scroll_debug_log_state ("anchor-restore-schedule-skip-no-view-or-buffer",
+			current_tab, view, buf);
+		return;
+	}
+
+	anchor = gtk_text_buffer_get_mark (buf, "anchor");
+	if (!anchor)
+	{
+		xtext_scroll_debug_log_state ("anchor-restore-schedule-skip-no-anchor-mark",
+			current_tab, view, buf);
+		return;
+	}
+
+	if (xtext_restore_anchor_idle_id != 0)
+	{
+		if (xtext_restore_anchor_view == view)
+		{
+			xtext_scroll_debug_log_state ("anchor-restore-schedule-coalesce-same-view",
+				current_tab, view, buf);
+			return;
+		}
+		xtext_restore_anchor_idle_cancel ();
+	}
+
+	xtext_restore_anchor_view = view;
+	xtext_restore_anchor_idle_id = g_idle_add (xtext_restore_anchor_idle_cb, view);
+	xtext_scroll_debug_log_state ("anchor-restore-scheduled", current_tab, view, buf);
 }
 
 static void
@@ -2322,6 +2724,8 @@ xtext_show_session_rendered (session *sess)
 	gboolean is_empty;
 	gboolean buffer_dirty;
 	gboolean replay_marklast_pending;
+	gboolean first_render;
+	gboolean first_show;
 	int col_px;
 	int stamp_px;
 
@@ -2348,6 +2752,7 @@ xtext_show_session_rendered (session *sess)
 		}
 		xtext_stamp_col_px = 0;
 		xtext_message_col_px = 0;
+		xtext_scroll_debug_log_state ("show-session-empty", sess, log_view, log_buffer);
 		return;
 	}
 
@@ -2357,6 +2762,8 @@ xtext_show_session_rendered (session *sess)
 		return;
 
 	log = session_logs ? g_hash_table_lookup (session_logs, sess) : NULL;
+	first_show = session_shown_once ?
+		!g_hash_table_contains (session_shown_once, sess) : TRUE;
 
 	log_view = widget->view;
 	log_buffer = buf;
@@ -2367,27 +2774,51 @@ xtext_show_session_rendered (session *sess)
 	gtk_text_buffer_get_bounds (buf, &start, &end);
 	is_empty = gtk_text_iter_equal (&start, &end);
 	buffer_dirty = session_buffer_is_dirty (sess);
+	first_render = is_empty;
+	xtext_scroll_debug_log_state (first_render ? "show-session-first-render" :
+		(buffer_dirty ? "show-session-rerender-dirty" : "show-session-reuse-buffer"),
+		sess, widget->view, buf);
 
 	if (is_empty || buffer_dirty)
 	{
+		if (xtext_resize_rerendering && !first_show)
+			xtext_save_anchor_from_view (widget->view, buf);
 		xtext_render_session = sess;
 		xtext_render_raw_all (buf, (log && log->len > 0) ? log->str : "");
 		xtext_render_session = NULL;
 		session_buffer_set_dirty (sess, FALSE);
+		if (first_show)
+		{
+			xtext_scroll_debug_log_state ("show-session-first-show-scroll-end",
+				sess, widget->view, buf);
+			xtext_scroll_to_end ();
+		}
+		else if (xtext_resize_rerendering)
+			xtext_restore_view_from_anchor (widget->view, buf);
 	}
 	else
 	{
 		/* Buffer already has content; just recompute tab stop */
 		col_px = xtext_compute_message_column_px (log ? log->str : "", &stamp_px);
 		xtext_set_message_tab_stop (col_px, stamp_px);
+		if (first_show)
+		{
+			xtext_scroll_debug_log_state ("show-session-first-show-scroll-end",
+				sess, widget->view, buf);
+			xtext_scroll_to_end ();
+		}
 	}
+
+	if (session_shown_once)
+		g_hash_table_insert (session_shown_once, sess, GINT_TO_POINTER (TRUE));
 
 	replay_marklast_pending = session_replay_marklast &&
 		g_hash_table_contains (session_replay_marklast, sess);
 	if (replay_marklast_pending)
 	{
-		g_hash_table_remove (session_replay_marklast, sess);
-		xtext_scroll_to_end ();
+		xtext_scroll_debug_log_state ("show-session-replay-marklast", sess,
+			widget->view, buf);
+		xtext_scroll_to_end_for_replay (sess);
 	}
 }
 
@@ -2402,7 +2833,9 @@ xtext_resize_refresh_idle_cb (gpointer user_data)
 
 	/* Force re-render to recalculate word-wrap for the new width. */
 	session_buffer_mark_all_dirty ();
+	xtext_resize_rerendering = TRUE;
 	xtext_show_session_rendered (current_tab);
+	xtext_resize_rerendering = FALSE;
 	return G_SOURCE_REMOVE;
 }
 
@@ -2548,6 +2981,8 @@ fe_gtk4_xtext_init (void)
 	if (!session_widgets)
 		session_widgets = g_hash_table_new_full (g_direct_hash, g_direct_equal,
 			NULL, session_widget_free);
+	if (!session_shown_once)
+		session_shown_once = g_hash_table_new (g_direct_hash, g_direct_equal);
 	if (!session_replay_marklast)
 		session_replay_marklast = g_hash_table_new (g_direct_hash, g_direct_equal);
 	if (!color_tags)
@@ -2559,10 +2994,14 @@ fe_gtk4_xtext_init (void)
 	xtext_message_col_px = 0;
 	xtext_render_session = NULL;
 	xtext_scroll_to_end_idle_id = 0;
+	xtext_restore_anchor_idle_id = 0;
+	xtext_resize_rerendering = FALSE;
 	xtext_stack = NULL;
 	xtext_empty_scroll = NULL;
 	xtext_empty_view = NULL;
 	xtext_scroll_to_end_view = NULL;
+	xtext_restore_anchor_view = NULL;
+	xtext_scroll_to_end_replay_session = NULL;
 }
 
 void
@@ -2587,6 +3026,11 @@ fe_gtk4_xtext_cleanup (void)
 	{
 		g_hash_table_unref (session_widgets);
 		session_widgets = NULL;
+	}
+	if (session_shown_once)
+	{
+		g_hash_table_unref (session_shown_once);
+		session_shown_once = NULL;
 	}
 	if (session_replay_marklast)
 	{
@@ -2629,7 +3073,9 @@ fe_gtk4_xtext_cleanup (void)
 		g_source_remove (xtext_resize_idle_id);
 		xtext_resize_idle_id = 0;
 	}
+	xtext_restore_anchor_idle_cancel ();
 	xtext_scroll_to_end_idle_cancel ();
+	xtext_scroll_to_end_replay_session = NULL;
 	if (xtext_stack && xtext_resize_tick_id != 0)
 	{
 		gtk_widget_remove_tick_callback (xtext_stack, xtext_resize_tick_id);
@@ -2640,10 +3086,12 @@ fe_gtk4_xtext_cleanup (void)
 	xtext_message_col_px = 0;
 	xtext_last_view_width = -1;
 	xtext_render_session = NULL;
+	xtext_resize_rerendering = FALSE;
 	xtext_stack = NULL;
 	xtext_empty_scroll = NULL;
 	xtext_empty_view = NULL;
 	xtext_scroll_to_end_view = NULL;
+	xtext_restore_anchor_view = NULL;
 	log_view = NULL;
 	log_buffer = NULL;
 }
@@ -2666,6 +3114,7 @@ fe_gtk4_xtext_create_widget (void)
 		g_source_remove (xtext_resize_idle_id);
 		xtext_resize_idle_id = 0;
 	}
+	xtext_restore_anchor_idle_cancel ();
 	xtext_scroll_to_end_idle_cancel ();
 	xtext_last_view_width = -1;
 
@@ -2843,15 +3292,17 @@ fe_gtk4_xtext_set_marker_last (session *sess)
 	if (!sess || !is_session (sess))
 		return;
 
+	xtext_scroll_debug_log_state ("set-marker-last", sess, log_view, log_buffer);
+
 	if (session_replay_marklast)
 		g_hash_table_insert (session_replay_marklast, sess, GINT_TO_POINTER (TRUE));
 
 	/* If the replayed session is currently visible, apply immediately. */
 	if (sess == current_tab && log_view)
 	{
-		xtext_scroll_to_end ();
-		if (session_replay_marklast)
-			g_hash_table_remove (session_replay_marklast, sess);
+		xtext_scroll_debug_log_state ("set-marker-last-visible-schedule", sess,
+			log_view, log_buffer);
+		xtext_scroll_to_end_for_replay (sess);
 	}
 }
 
@@ -2875,6 +3326,9 @@ fe_gtk4_xtext_remove_session (session *sess)
 	if (session_buffers_dirty)
 		g_hash_table_remove (session_buffers_dirty, sess);
 
+	if (session_shown_once)
+		g_hash_table_remove (session_shown_once, sess);
+
 	if (session_replay_marklast)
 		g_hash_table_remove (session_replay_marklast, sess);
 
@@ -2883,6 +3337,8 @@ fe_gtk4_xtext_remove_session (session *sess)
 		HcSessionWidget *widget;
 
 		widget = g_hash_table_lookup (session_widgets, sess);
+		if (widget && widget->view && widget->view == xtext_restore_anchor_view)
+			xtext_restore_anchor_idle_cancel ();
 		if (widget && widget->view == log_view)
 		{
 			log_view = xtext_empty_view;
