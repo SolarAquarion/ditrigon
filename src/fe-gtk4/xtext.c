@@ -34,6 +34,12 @@ typedef struct
 	GArray *raw_map; /* guint byte offset in raw text for each plain byte (+sentinel at end). */
 } HcVisibleMap;
 
+typedef struct
+{
+	GtkWidget *scroll;
+	GtkWidget *view;
+} HcSessionWidget;
+
 #define HC_WRAP_RIGHT_PAD_PX 8
 #define HC_WRAP_MIN_CONTENT_PX 80
 #define HC_PREFIX_MAX_CHARS 32
@@ -57,8 +63,8 @@ typedef struct
 
 static GHashTable *session_logs;
 static GHashTable *session_buffers;
-static GHashTable *session_at_bottom;
 static GHashTable *session_buffers_dirty;
+static GHashTable *session_widgets;
 static GHashTable *color_tags;
 static GtkTextTagTable *shared_tag_table;
 static GtkTextTag *tag_stamp;
@@ -85,13 +91,19 @@ static guint xtext_resize_tick_id;
 static guint xtext_resize_idle_id;
 static int xtext_last_view_width;
 static session *xtext_render_session;
-static gboolean xtext_buffers_stale;
+static GtkWidget *xtext_stack;
+static GtkWidget *xtext_empty_scroll;
+static GtkWidget *xtext_empty_view;
 
 static void xtext_render_raw_append (GtkTextBuffer *buf, const char *raw);
 static gboolean xtext_is_at_end (void);
 static gboolean xtext_parse_color_number (const char *text, gsize len, gsize *index, int *value);
 static void xtext_tabs_to_spaces (char *text);
 static void xtext_color_to_rgba (int color_index, GdkRGBA *rgba);
+static GtkTextBuffer *xtext_create_buffer_with_marks (void);
+static void xtext_setup_view_controllers (GtkWidget *view);
+static HcSessionWidget *session_widget_ensure (session *sess);
+static void session_buffer_mark_all_dirty (void);
 
 static gboolean
 xtext_is_space_char (gunichar ch)
@@ -931,7 +943,6 @@ static GtkTextBuffer *
 session_buffer_ensure (session *sess)
 {
 	GtkTextBuffer *buf;
-	GtkTextIter iter;
 
 	if (!session_buffers || !shared_tag_table || !sess || !is_session (sess))
 		return NULL;
@@ -940,10 +951,10 @@ session_buffer_ensure (session *sess)
 	if (buf)
 		return buf;
 
-	buf = gtk_text_buffer_new (shared_tag_table);
-	gtk_text_buffer_get_end_iter (buf, &iter);
-	gtk_text_buffer_create_mark (buf, "end", &iter, FALSE);
-	gtk_text_buffer_create_mark (buf, "anchor", &iter, TRUE);
+	buf = xtext_create_buffer_with_marks ();
+	if (!buf)
+		return NULL;
+
 	g_hash_table_insert (session_buffers, sess, buf);
 	return buf;
 }
@@ -967,6 +978,131 @@ session_buffer_set_dirty (session *sess, gboolean dirty)
 		g_hash_table_insert (session_buffers_dirty, sess, GINT_TO_POINTER (TRUE));
 	else
 		g_hash_table_remove (session_buffers_dirty, sess);
+}
+
+static void
+session_buffer_mark_all_dirty (void)
+{
+	GHashTableIter iter;
+	gpointer key;
+	gpointer value;
+
+	if (!session_buffers_dirty || !session_buffers)
+		return;
+
+	g_hash_table_iter_init (&iter, session_buffers);
+	while (g_hash_table_iter_next (&iter, &key, &value))
+	{
+		(void) value;
+		g_hash_table_insert (session_buffers_dirty, key, GINT_TO_POINTER (TRUE));
+	}
+}
+
+static GtkTextBuffer *
+xtext_create_buffer_with_marks (void)
+{
+	GtkTextBuffer *buf;
+	GtkTextIter iter;
+
+	if (!shared_tag_table)
+		return NULL;
+
+	buf = gtk_text_buffer_new (shared_tag_table);
+	gtk_text_buffer_get_end_iter (buf, &iter);
+	gtk_text_buffer_create_mark (buf, "end", &iter, FALSE);
+	gtk_text_buffer_create_mark (buf, "anchor", &iter, TRUE);
+
+	return buf;
+}
+
+static void
+xtext_setup_view_controllers (GtkWidget *view)
+{
+	GtkGesture *gesture;
+	GtkEventController *motion;
+
+	if (!view)
+		return;
+
+	gesture = gtk_gesture_click_new ();
+	gtk_gesture_single_set_button (GTK_GESTURE_SINGLE (gesture), GDK_BUTTON_PRIMARY);
+	g_signal_connect (gesture, "pressed", G_CALLBACK (xtext_primary_press_cb), NULL);
+	g_signal_connect (gesture, "released", G_CALLBACK (xtext_primary_release_cb), NULL);
+	gtk_widget_add_controller (view, GTK_EVENT_CONTROLLER (gesture));
+
+	gesture = gtk_gesture_click_new ();
+	gtk_gesture_single_set_button (GTK_GESTURE_SINGLE (gesture), GDK_BUTTON_SECONDARY);
+	gtk_event_controller_set_propagation_phase (GTK_EVENT_CONTROLLER (gesture), GTK_PHASE_CAPTURE);
+	g_signal_connect (gesture, "pressed", G_CALLBACK (xtext_secondary_press_cb), NULL);
+	g_signal_connect (gesture, "released", G_CALLBACK (xtext_secondary_click_cb), NULL);
+	gtk_widget_add_controller (view, GTK_EVENT_CONTROLLER (gesture));
+
+	motion = gtk_event_controller_motion_new ();
+	g_signal_connect (motion, "motion", G_CALLBACK (xtext_motion_cb), NULL);
+	g_signal_connect (motion, "leave", G_CALLBACK (xtext_motion_leave_cb), NULL);
+	gtk_widget_add_controller (view, motion);
+}
+
+static void
+session_widget_free (gpointer data)
+{
+	HcSessionWidget *widget;
+	GtkWidget *parent;
+
+	widget = data;
+	if (!widget)
+		return;
+
+	if (widget->scroll)
+	{
+		parent = gtk_widget_get_parent (widget->scroll);
+		if (parent && GTK_IS_STACK (parent))
+			gtk_stack_remove (GTK_STACK (parent), widget->scroll);
+		g_object_unref (widget->scroll);
+	}
+
+	g_free (widget);
+}
+
+static HcSessionWidget *
+session_widget_ensure (session *sess)
+{
+	HcSessionWidget *widget;
+	GtkBuilder *builder;
+	GtkWidget *scroll;
+	GtkWidget *view;
+	GtkTextBuffer *buf;
+
+	if (!session_widgets || !xtext_stack || !sess || !is_session (sess))
+		return NULL;
+
+	widget = g_hash_table_lookup (session_widgets, sess);
+	if (widget)
+		return widget;
+
+	builder = fe_gtk4_builder_new_from_resource (XTEXT_UI_PATH);
+	scroll = fe_gtk4_builder_get_widget (builder, "xtext_scroll", GTK_TYPE_SCROLLED_WINDOW);
+	view = fe_gtk4_builder_get_widget (builder, "xtext_log_view", GTK_TYPE_TEXT_VIEW);
+	g_object_ref (scroll);
+	g_object_unref (builder);
+
+	gtk_text_view_set_tabs (GTK_TEXT_VIEW (view), NULL);
+	gtk_text_view_set_monospace (GTK_TEXT_VIEW (view), xtext_font_desc ? FALSE : TRUE);
+	gtk_text_view_set_wrap_mode (GTK_TEXT_VIEW (view),
+		prefs.hex_text_wordwrap ? GTK_WRAP_WORD_CHAR : GTK_WRAP_NONE);
+	xtext_setup_view_controllers (view);
+
+	widget = g_new0 (HcSessionWidget, 1);
+	widget->scroll = scroll;
+	widget->view = view;
+
+	buf = session_buffer_ensure (sess);
+	if (buf)
+		gtk_text_view_set_buffer (GTK_TEXT_VIEW (view), buf);
+
+	gtk_stack_add_child (GTK_STACK (xtext_stack), scroll);
+	g_hash_table_insert (session_widgets, sess, widget);
+	return widget;
 }
 
 static GtkTextTag *
@@ -1113,14 +1249,19 @@ xtext_measure_plain_width (const char *text, gsize len)
 	PangoLayout *layout;
 	char *tmp;
 	int width;
+	GtkWidget *measure_view;
 
-	if (!log_view || !text || len == 0)
+	if (!text || len == 0)
+		return 0;
+
+	measure_view = log_view ? log_view : xtext_empty_view;
+	if (!measure_view)
 		return 0;
 
 	tmp = g_strndup (text, len);
 	xtext_tabs_to_spaces (tmp);
 
-	layout = gtk_widget_create_pango_layout (log_view, tmp);
+	layout = gtk_widget_create_pango_layout (measure_view, tmp);
 	if (xtext_font_desc)
 		pango_layout_set_font_description (layout, xtext_font_desc);
 	pango_layout_get_pixel_size (layout, &width, NULL);
@@ -1821,6 +1962,7 @@ xtext_render_formatted_wrapped (GtkTextBuffer *buf, GtkTextIter *iter, const cha
 	int line_idx;
 	gsize raw_start;
 	HcTextStyle style;
+	GtkWidget *measure_view;
 
 	wrap_width = xtext_message_wrap_width_px ();
 	if (wrap_width <= 0 || !text || len == 0)
@@ -1837,7 +1979,15 @@ xtext_render_formatted_wrapped (GtkTextBuffer *buf, GtkTextIter *iter, const cha
 		return;
 	}
 
-	layout = gtk_widget_create_pango_layout (log_view, map->plain->str);
+	measure_view = log_view ? log_view : xtext_empty_view;
+	if (!measure_view)
+	{
+		xtext_visible_map_free (map);
+		xtext_render_formatted (buf, iter, text, len, layout_tag);
+		return;
+	}
+
+	layout = gtk_widget_create_pango_layout (measure_view, map->plain->str);
 	if (xtext_font_desc)
 		pango_layout_set_font_description (layout, xtext_font_desc);
 	pango_layout_set_wrap (layout, PANGO_WRAP_WORD_CHAR);
@@ -2041,65 +2191,6 @@ xtext_render_raw_append (GtkTextBuffer *buf, const char *raw)
 	xtext_render_raw_at_iter (buf, &iter, raw ? raw : "");
 }
 
-static void
-xtext_save_scroll_position (session *sess)
-{
-	GtkTextBuffer *buf;
-	GtkTextMark *anchor;
-	GtkTextIter iter;
-	GdkRectangle visible;
-	gboolean at_end;
-	int bx, by;
-
-	if (!log_view || !sess || !is_session (sess))
-		return;
-
-	buf = g_hash_table_lookup (session_buffers, sess);
-	if (!buf)
-		return;
-
-	anchor = gtk_text_buffer_get_mark (buf, "anchor");
-	if (!anchor)
-		return;
-
-	at_end = xtext_is_at_end ();
-
-	if (session_at_bottom)
-		g_hash_table_insert (session_at_bottom, sess,
-			GINT_TO_POINTER (at_end));
-
-	if (!at_end)
-	{
-		/* Save the iter at the top of the visible area */
-		gtk_text_view_get_visible_rect (GTK_TEXT_VIEW (log_view), &visible);
-		gtk_text_view_window_to_buffer_coords (GTK_TEXT_VIEW (log_view),
-			GTK_TEXT_WINDOW_WIDGET, 0, 0, &bx, &by);
-		gtk_text_view_get_iter_at_location (GTK_TEXT_VIEW (log_view),
-			&iter, bx, by);
-		gtk_text_buffer_move_mark (buf, anchor, &iter);
-	}
-}
-
-static gboolean
-scroll_to_anchor_idle (gpointer data)
-{
-	GtkTextView *view = GTK_TEXT_VIEW (data);
-	GtkTextBuffer *buffer;
-	GtkTextMark *mark;
-
-	if (gtk_widget_get_width (GTK_WIDGET (view)) <= 0)
-		return G_SOURCE_CONTINUE;
-
-	buffer = gtk_text_view_get_buffer (view);
-	mark = gtk_text_buffer_get_mark (buffer, "anchor");
-	if (!mark)
-		return G_SOURCE_REMOVE;
-
-	gtk_text_view_scroll_to_mark (view, mark, 0.0, TRUE, 0.0, 0.0);
-
-	return G_SOURCE_REMOVE;
-}
-
 static gboolean
 scroll_to_end_idle (gpointer data)
 {
@@ -2134,7 +2225,7 @@ xtext_scroll_to_end (void)
 	if (!mark)
 		return;
 
-	/* schedule scroll to mark in idle to prevent races */
+	/* Schedule restore in idle to avoid races with widget allocation. */
 	g_idle_add (scroll_to_end_idle, log_view);
 }
 
@@ -2165,57 +2256,60 @@ xtext_is_at_end (void)
 static void
 xtext_show_session_rendered (session *sess)
 {
+	HcSessionWidget *widget;
 	GtkTextBuffer *buf;
 	GString *log;
 	GtkTextIter start;
 	GtkTextIter end;
 	gboolean is_empty;
 	gboolean buffer_dirty;
-	gboolean restore_at_bottom;
 	int col_px;
 	int stamp_px;
 
-	if (!log_view)
+	if (!xtext_stack)
 		return;
 
-	/* NOTE: current_tab is already set to the incoming session by
-	 * fe_set_channel() before this function is called, so we cannot
-	 * use it to identify the outgoing session.  The caller must save
-	 * the scroll position before updating current_tab.  See
-	 * fe_set_channel() in maingui.c. */
-
 	/* Clear hover/search state — marks belong to the old buffer */
+	if (log_view)
+		gtk_widget_set_cursor_from_name (log_view, NULL);
 	xtext_link_hover_clear ();
 	xtext_search_mark = NULL;
+	xtext_hover_start_mark = NULL;
+	xtext_hover_end_mark = NULL;
 
-	log = NULL;
-	if (session_logs && sess && is_session (sess))
-		log = g_hash_table_lookup (session_logs, sess);
-
-	buf = (sess && is_session (sess)) ? session_buffer_ensure (sess) : NULL;
-	if (!buf)
+	if (!sess || !is_session (sess))
 	{
-		/* No valid session; show an empty buffer */
-		GtkTextIter end_iter;
-
-		buf = gtk_text_buffer_new (shared_tag_table);
-		gtk_text_buffer_get_end_iter (buf, &end_iter);
-		gtk_text_buffer_create_mark (buf, "end", &end_iter, FALSE);
-		log_buffer = buf;
-		gtk_text_view_set_buffer (GTK_TEXT_VIEW (log_view), log_buffer);
-		g_object_unref (buf); /* text view holds a ref */
+		if (xtext_empty_scroll)
+			gtk_stack_set_visible_child (GTK_STACK (xtext_stack), xtext_empty_scroll);
+		if (xtext_empty_view)
+		{
+			log_view = xtext_empty_view;
+			log_buffer = gtk_text_view_get_buffer (GTK_TEXT_VIEW (xtext_empty_view));
+			gtk_text_view_set_tabs (GTK_TEXT_VIEW (xtext_empty_view), NULL);
+		}
+		xtext_stamp_col_px = 0;
+		xtext_message_col_px = 0;
 		return;
 	}
 
+	widget = session_widget_ensure (sess);
+	buf = session_buffer_ensure (sess);
+	if (!widget || !buf)
+		return;
+
+	log = session_logs ? g_hash_table_lookup (session_logs, sess) : NULL;
+
+	log_view = widget->view;
 	log_buffer = buf;
-	gtk_text_view_set_buffer (GTK_TEXT_VIEW (log_view), log_buffer);
+	gtk_text_view_set_buffer (GTK_TEXT_VIEW (widget->view), log_buffer);
+	gtk_stack_set_visible_child (GTK_STACK (xtext_stack), widget->scroll);
 
 	/* Check if buffer needs rendering */
 	gtk_text_buffer_get_bounds (buf, &start, &end);
 	is_empty = gtk_text_iter_equal (&start, &end);
 	buffer_dirty = session_buffer_is_dirty (sess);
 
-	if (is_empty || xtext_buffers_stale || buffer_dirty)
+	if (is_empty || buffer_dirty)
 	{
 		xtext_render_session = sess;
 		xtext_render_raw_all (buf, (log && log->len > 0) ? log->str : "");
@@ -2228,22 +2322,6 @@ xtext_show_session_rendered (session *sess)
 		col_px = xtext_compute_message_column_px (log ? log->str : "", &stamp_px);
 		xtext_set_message_tab_stop (col_px, stamp_px);
 	}
-
-	xtext_buffers_stale = FALSE;
-
-	/* Restore scroll position: at-bottom or saved anchor */
-	restore_at_bottom = TRUE;
-	if (session_at_bottom)
-	{
-		gpointer val;
-		if (g_hash_table_lookup_extended (session_at_bottom, sess, NULL, &val))
-			restore_at_bottom = GPOINTER_TO_INT (val);
-	}
-
-	if (restore_at_bottom)
-		xtext_scroll_to_end ();
-	else
-		g_idle_add (scroll_to_anchor_idle, log_view);
 }
 
 static gboolean
@@ -2252,11 +2330,11 @@ xtext_resize_refresh_idle_cb (gpointer user_data)
 	(void) user_data;
 	xtext_resize_idle_id = 0;
 
-	if (!log_view || !current_tab || !is_session (current_tab))
+	if (!xtext_stack || !current_tab || !is_session (current_tab))
 		return G_SOURCE_REMOVE;
 
-	/* Force re-render to recalculate word-wrap for the new width */
-	xtext_buffers_stale = TRUE;
+	/* Force re-render to recalculate word-wrap for the new width. */
+	session_buffer_mark_all_dirty ();
 	xtext_show_session_rendered (current_tab);
 	return G_SOURCE_REMOVE;
 }
@@ -2269,13 +2347,13 @@ xtext_resize_tick_cb (GtkWidget *widget, GdkFrameClock *frame_clock, gpointer us
 	(void) frame_clock;
 	(void) user_data;
 
-	if (!widget || widget != log_view)
+	if (!widget || widget != xtext_stack)
 		return G_SOURCE_CONTINUE;
 
 	if (!gtk_widget_get_realized (widget))
 		return G_SOURCE_CONTINUE;
 
-	width = gtk_widget_get_width (widget);
+	width = gtk_widget_get_width (xtext_stack);
 	if (width <= 0 || width == xtext_last_view_width)
 		return G_SOURCE_CONTINUE;
 
@@ -2290,17 +2368,48 @@ static void
 xtext_apply_font_pref (void)
 {
 	PangoFontDescription *desc;
+	GHashTableIter iter;
+	gpointer key;
+	gpointer value;
 
-	if (!log_view || !tag_font)
+	if (!tag_font)
 		return;
 
 	desc = NULL;
 	if (prefs.hex_text_font[0])
 		desc = pango_font_description_from_string (prefs.hex_text_font);
 
-	gtk_text_view_set_monospace (GTK_TEXT_VIEW (log_view), desc ? FALSE : TRUE);
-	gtk_text_view_set_wrap_mode (GTK_TEXT_VIEW (log_view),
-		prefs.hex_text_wordwrap ? GTK_WRAP_WORD_CHAR : GTK_WRAP_NONE);
+	if (xtext_empty_view)
+	{
+		gtk_text_view_set_monospace (GTK_TEXT_VIEW (xtext_empty_view), desc ? FALSE : TRUE);
+		gtk_text_view_set_wrap_mode (GTK_TEXT_VIEW (xtext_empty_view),
+			prefs.hex_text_wordwrap ? GTK_WRAP_WORD_CHAR : GTK_WRAP_NONE);
+	}
+
+	if (session_widgets)
+	{
+		g_hash_table_iter_init (&iter, session_widgets);
+		while (g_hash_table_iter_next (&iter, &key, &value))
+		{
+			HcSessionWidget *widget;
+
+			(void) key;
+			widget = value;
+			if (!widget || !widget->view)
+				continue;
+			gtk_text_view_set_monospace (GTK_TEXT_VIEW (widget->view), desc ? FALSE : TRUE);
+			gtk_text_view_set_wrap_mode (GTK_TEXT_VIEW (widget->view),
+				prefs.hex_text_wordwrap ? GTK_WRAP_WORD_CHAR : GTK_WRAP_NONE);
+		}
+	}
+
+	if (log_view)
+	{
+		gtk_text_view_set_monospace (GTK_TEXT_VIEW (log_view), desc ? FALSE : TRUE);
+		gtk_text_view_set_wrap_mode (GTK_TEXT_VIEW (log_view),
+			prefs.hex_text_wordwrap ? GTK_WRAP_WORD_CHAR : GTK_WRAP_NONE);
+	}
+
 	g_object_set (tag_font, "font-desc", desc, NULL);
 
 	if (xtext_font_desc)
@@ -2367,10 +2476,11 @@ fe_gtk4_xtext_init (void)
 	if (!session_buffers)
 		session_buffers = g_hash_table_new_full (g_direct_hash, g_direct_equal,
 			NULL, session_buffer_free);
-	if (!session_at_bottom)
-		session_at_bottom = g_hash_table_new (g_direct_hash, g_direct_equal);
 	if (!session_buffers_dirty)
 		session_buffers_dirty = g_hash_table_new (g_direct_hash, g_direct_equal);
+	if (!session_widgets)
+		session_widgets = g_hash_table_new_full (g_direct_hash, g_direct_equal,
+			NULL, session_widget_free);
 	if (!color_tags)
 		color_tags = g_hash_table_new (g_direct_hash, g_direct_equal);
 	xtext_create_shared_tag_table ();
@@ -2379,7 +2489,9 @@ fe_gtk4_xtext_init (void)
 	xtext_stamp_col_px = 0;
 	xtext_message_col_px = 0;
 	xtext_render_session = NULL;
-	xtext_buffers_stale = FALSE;
+	xtext_stack = NULL;
+	xtext_empty_scroll = NULL;
+	xtext_empty_view = NULL;
 }
 
 void
@@ -2395,15 +2507,15 @@ fe_gtk4_xtext_cleanup (void)
 		g_hash_table_unref (session_logs);
 		session_logs = NULL;
 	}
-	if (session_at_bottom)
-	{
-		g_hash_table_unref (session_at_bottom);
-		session_at_bottom = NULL;
-	}
 	if (session_buffers_dirty)
 	{
 		g_hash_table_unref (session_buffers_dirty);
 		session_buffers_dirty = NULL;
+	}
+	if (session_widgets)
+	{
+		g_hash_table_unref (session_widgets);
+		session_widgets = NULL;
 	}
 	if (color_tags)
 	{
@@ -2441,9 +2553,9 @@ fe_gtk4_xtext_cleanup (void)
 		g_source_remove (xtext_resize_idle_id);
 		xtext_resize_idle_id = 0;
 	}
-	if (log_view && xtext_resize_tick_id != 0)
+	if (xtext_stack && xtext_resize_tick_id != 0)
 	{
-		gtk_widget_remove_tick_callback (log_view, xtext_resize_tick_id);
+		gtk_widget_remove_tick_callback (xtext_stack, xtext_resize_tick_id);
 		xtext_resize_tick_id = 0;
 	}
 	xtext_space_width_px = 0;
@@ -2451,7 +2563,11 @@ fe_gtk4_xtext_cleanup (void)
 	xtext_message_col_px = 0;
 	xtext_last_view_width = -1;
 	xtext_render_session = NULL;
-	xtext_buffers_stale = FALSE;
+	xtext_stack = NULL;
+	xtext_empty_scroll = NULL;
+	xtext_empty_view = NULL;
+	log_view = NULL;
+	log_buffer = NULL;
 }
 
 GtkWidget *
@@ -2459,10 +2575,12 @@ fe_gtk4_xtext_create_widget (void)
 {
 	GtkBuilder *builder;
 	GtkWidget *scroll;
+	GtkWidget *stack;
+	GtkTextBuffer *buf;
 
-	if (log_view && xtext_resize_tick_id != 0)
+	if (xtext_stack && xtext_resize_tick_id != 0)
 	{
-		gtk_widget_remove_tick_callback (log_view, xtext_resize_tick_id);
+		gtk_widget_remove_tick_callback (xtext_stack, xtext_resize_tick_id);
 		xtext_resize_tick_id = 0;
 	}
 	if (xtext_resize_idle_id != 0)
@@ -2474,53 +2592,50 @@ fe_gtk4_xtext_create_widget (void)
 
 	builder = fe_gtk4_builder_new_from_resource (XTEXT_UI_PATH);
 	scroll = fe_gtk4_builder_get_widget (builder, "xtext_scroll", GTK_TYPE_SCROLLED_WINDOW);
-	log_view = fe_gtk4_builder_get_widget (builder, "xtext_log_view", GTK_TYPE_TEXT_VIEW);
+	xtext_empty_view = fe_gtk4_builder_get_widget (builder, "xtext_log_view", GTK_TYPE_TEXT_VIEW);
 	g_object_ref (scroll);
 	g_object_unref (builder);
 
-	gtk_text_view_set_tabs (GTK_TEXT_VIEW (log_view), NULL);
+	gtk_text_view_set_tabs (GTK_TEXT_VIEW (xtext_empty_view), NULL);
+	xtext_setup_view_controllers (xtext_empty_view);
+
+	buf = xtext_create_buffer_with_marks ();
+	if (buf)
 	{
-		GtkGesture *gesture;
-		GtkEventController *motion;
-
-		gesture = gtk_gesture_click_new ();
-		gtk_gesture_single_set_button (GTK_GESTURE_SINGLE (gesture), GDK_BUTTON_PRIMARY);
-		g_signal_connect (gesture, "pressed", G_CALLBACK (xtext_primary_press_cb), NULL);
-		g_signal_connect (gesture, "released", G_CALLBACK (xtext_primary_release_cb), NULL);
-		gtk_widget_add_controller (log_view, GTK_EVENT_CONTROLLER (gesture));
-
-		gesture = gtk_gesture_click_new ();
-		gtk_gesture_single_set_button (GTK_GESTURE_SINGLE (gesture), GDK_BUTTON_SECONDARY);
-		gtk_event_controller_set_propagation_phase (GTK_EVENT_CONTROLLER (gesture), GTK_PHASE_CAPTURE);
-		g_signal_connect (gesture, "pressed", G_CALLBACK (xtext_secondary_press_cb), NULL);
-		g_signal_connect (gesture, "released", G_CALLBACK (xtext_secondary_click_cb), NULL);
-		gtk_widget_add_controller (log_view, GTK_EVENT_CONTROLLER (gesture));
-
-		motion = gtk_event_controller_motion_new ();
-		g_signal_connect (motion, "motion", G_CALLBACK (xtext_motion_cb), NULL);
-		g_signal_connect (motion, "leave", G_CALLBACK (xtext_motion_leave_cb), NULL);
-		gtk_widget_add_controller (log_view, motion);
+		gtk_text_view_set_buffer (GTK_TEXT_VIEW (xtext_empty_view), buf);
+		g_object_unref (buf);
 	}
 
-	log_buffer = NULL;
+	stack = gtk_stack_new ();
+	gtk_widget_set_hexpand (stack, TRUE);
+	gtk_widget_set_vexpand (stack, TRUE);
+	gtk_stack_set_transition_type (GTK_STACK (stack), GTK_STACK_TRANSITION_TYPE_NONE);
+	gtk_stack_add_child (GTK_STACK (stack), scroll);
+	gtk_stack_set_visible_child (GTK_STACK (stack), scroll);
+	g_object_unref (scroll);
+
+	xtext_stack = stack;
+	xtext_empty_scroll = scroll;
+	log_view = xtext_empty_view;
+	log_buffer = gtk_text_view_get_buffer (GTK_TEXT_VIEW (xtext_empty_view));
 
 	xtext_search_mark = NULL;
 	xtext_hover_start_mark = NULL;
 	xtext_hover_end_mark = NULL;
 	xtext_stamp_col_px = 0;
 	xtext_message_col_px = 0;
-	xtext_resize_tick_id = gtk_widget_add_tick_callback (log_view, xtext_resize_tick_cb, NULL, NULL);
+	xtext_resize_tick_id = gtk_widget_add_tick_callback (xtext_stack, xtext_resize_tick_cb, NULL, NULL);
 	xtext_render_session = NULL;
 	xtext_apply_font_pref ();
 
-	return scroll;
+	return stack;
 }
 
 void
 fe_gtk4_xtext_apply_prefs (void)
 {
 	xtext_apply_font_pref ();
-	xtext_buffers_stale = TRUE;
+	session_buffer_mark_all_dirty ();
 	if (current_tab && is_session (current_tab))
 		fe_gtk4_xtext_show_session (current_tab);
 }
@@ -2550,6 +2665,7 @@ fe_gtk4_xtext_append_for_session (session *sess, const char *text)
 {
 	GString *log;
 	GtkTextBuffer *buf;
+	HcSessionWidget *widget;
 
 	if (!text || !text[0])
 		return;
@@ -2575,11 +2691,24 @@ fe_gtk4_xtext_append_for_session (session *sess, const char *text)
 	}
 
 	/* Only render for the currently visible session */
+	widget = session_widget_ensure (sess);
 	buf = session_buffer_ensure (sess);
-	if (!buf)
+	if (!buf || !widget)
 		return;
 
+	log_view = widget->view;
+	log_buffer = buf;
 	xtext_render_session = sess;
+
+	if (session_buffer_is_dirty (sess))
+	{
+		xtext_render_raw_all (buf, log ? log->str : "");
+		xtext_render_session = NULL;
+		session_buffer_set_dirty (sess, FALSE);
+		if (xtext_is_at_end ())
+			xtext_scroll_to_end ();
+		return;
+	}
 
 	if (log)
 	{
@@ -2608,17 +2737,8 @@ fe_gtk4_xtext_append_for_session (session *sess, const char *text)
 }
 
 void
-fe_gtk4_xtext_save_scroll_position (session *sess)
-{
-	xtext_save_scroll_position (sess);
-}
-
-void
 fe_gtk4_xtext_force_scroll_to_end (void)
 {
-	if (session_at_bottom && current_tab && is_session (current_tab))
-		g_hash_table_insert (session_at_bottom, current_tab,
-			GINT_TO_POINTER (TRUE));
 	xtext_scroll_to_end ();
 }
 
@@ -2639,11 +2759,26 @@ fe_gtk4_xtext_remove_session (session *sess)
 	if (session_logs)
 		g_hash_table_remove (session_logs, sess);
 
-	if (session_at_bottom)
-		g_hash_table_remove (session_at_bottom, sess);
-
 	if (session_buffers_dirty)
 		g_hash_table_remove (session_buffers_dirty, sess);
+
+	if (session_widgets)
+	{
+		HcSessionWidget *widget;
+
+		widget = g_hash_table_lookup (session_widgets, sess);
+		if (widget && widget->view == log_view)
+		{
+			log_view = xtext_empty_view;
+			log_buffer = xtext_empty_view ?
+				gtk_text_view_get_buffer (GTK_TEXT_VIEW (xtext_empty_view)) : NULL;
+			if (xtext_stack && xtext_empty_scroll)
+				gtk_stack_set_visible_child (GTK_STACK (xtext_stack), xtext_empty_scroll);
+			xtext_stamp_col_px = 0;
+			xtext_message_col_px = 0;
+		}
+		g_hash_table_remove (session_widgets, sess);
+	}
 
 	if (session_buffers)
 	{
@@ -2671,6 +2806,7 @@ fe_gtk4_xtext_clear_session (session *sess, int lines)
 {
 	GString *log;
 	GtkTextBuffer *buf;
+	HcSessionWidget *widget;
 
 	if (!sess)
 		sess = current_tab;
@@ -2693,18 +2829,24 @@ fe_gtk4_xtext_clear_session (session *sess, int lines)
 	else
 		session_log_trim_tail_lines (log, -lines);
 
+	if (sess != current_tab)
+	{
+		session_buffer_set_dirty (sess, TRUE);
+		return;
+	}
+
+	widget = session_widget_ensure (sess);
 	buf = session_buffer_ensure (sess);
 	if (buf)
 	{
+		if (widget && widget->view)
+			log_view = widget->view;
+		log_buffer = buf;
 		xtext_render_session = sess;
 		xtext_render_raw_all (buf, log->str);
 		xtext_render_session = NULL;
 		session_buffer_set_dirty (sess, FALSE);
 	}
-
-	if (session_at_bottom)
-		g_hash_table_insert (session_at_bottom, sess,
-			GINT_TO_POINTER (TRUE));
 
 	if (sess == current_tab)
 		xtext_scroll_to_end ();
