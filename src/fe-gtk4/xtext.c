@@ -42,6 +42,7 @@ typedef struct
 
 #define HC_WRAP_RIGHT_PAD_PX 8
 #define HC_WRAP_MIN_CONTENT_PX 80
+#define HC_STICKY_BOTTOM_EPSILON_PX 70.0
 #define HC_PREFIX_MAX_CHARS 32
 #define HC_PREFIX_MAX_WORDS 2
 #define HC_PREFIX_TWO_WORD_MAX_CHARS 16
@@ -107,6 +108,7 @@ static GtkTextBuffer *xtext_create_buffer_with_marks (void);
 static void xtext_setup_view_controllers (GtkWidget *view);
 static HcSessionWidget *session_widget_ensure (session *sess);
 static void session_buffer_mark_all_dirty (void);
+static gboolean xtext_should_stick_to_end (void);
 static void xtext_scroll_to_end_idle_finish (void);
 static void xtext_scroll_to_end_idle_cancel (void);
 
@@ -2273,23 +2275,40 @@ static gboolean
 xtext_is_at_end (void)
 {
 	GtkAdjustment *vadj;
+	double lower;
 	double value;
 	double upper;
 	double page;
+	double bottom;
+	double distance;
 
 	if (log_view)
 	{
 		vadj = gtk_scrollable_get_vadjustment (GTK_SCROLLABLE (log_view));
 		if (vadj)
 		{
+			lower = gtk_adjustment_get_lower (vadj);
 			value = gtk_adjustment_get_value (vadj);
 			upper = gtk_adjustment_get_upper (vadj);
 			page = gtk_adjustment_get_page_size (vadj);
-			return (value + page) >= (upper - 2.0);
+			bottom = MAX (lower, upper - page);
+			distance = bottom - value;
+			if (distance < 0.0)
+				distance = 0.0;
+			return distance <= HC_STICKY_BOTTOM_EPSILON_PX;
 		}
 	}
 
 	return TRUE;
+}
+
+static gboolean
+xtext_should_stick_to_end (void)
+{
+	if (xtext_scroll_to_end_idle_id != 0 && xtext_scroll_to_end_view == log_view)
+		return TRUE;
+
+	return xtext_is_at_end ();
 }
 
 static void
@@ -2703,6 +2722,8 @@ fe_gtk4_xtext_apply_prefs (void)
 void
 fe_gtk4_append_log_text (const char *text)
 {
+	gboolean stick_to_end;
+
 	if (!text)
 		return;
 
@@ -2713,10 +2734,11 @@ fe_gtk4_append_log_text (const char *text)
 		return;
 	}
 
+	stick_to_end = xtext_should_stick_to_end ();
 	xtext_render_session = (current_tab && is_session (current_tab)) ? current_tab : NULL;
 	xtext_render_raw_append (log_buffer, text);
 	xtext_render_session = NULL;
-	if (xtext_is_at_end ())
+	if (stick_to_end)
 		xtext_scroll_to_end ();
 }
 
@@ -2726,6 +2748,7 @@ fe_gtk4_xtext_append_for_session (session *sess, const char *text)
 	GString *log;
 	GtkTextBuffer *buf;
 	HcSessionWidget *widget;
+	gboolean stick_to_end;
 
 	if (!text || !text[0])
 		return;
@@ -2758,6 +2781,7 @@ fe_gtk4_xtext_append_for_session (session *sess, const char *text)
 
 	log_view = widget->view;
 	log_buffer = buf;
+	stick_to_end = xtext_should_stick_to_end ();
 	xtext_render_session = sess;
 
 	if (session_buffer_is_dirty (sess))
@@ -2765,7 +2789,7 @@ fe_gtk4_xtext_append_for_session (session *sess, const char *text)
 		xtext_render_raw_all (buf, log ? log->str : "");
 		xtext_render_session = NULL;
 		session_buffer_set_dirty (sess, FALSE);
-		if (xtext_is_at_end ())
+		if (stick_to_end)
 			xtext_scroll_to_end ();
 		return;
 	}
@@ -2782,7 +2806,7 @@ fe_gtk4_xtext_append_for_session (session *sess, const char *text)
 			xtext_render_raw_all (buf, log->str);
 			xtext_render_session = NULL;
 			session_buffer_set_dirty (sess, FALSE);
-			if (xtext_is_at_end ())
+			if (stick_to_end)
 				xtext_scroll_to_end ();
 			return;
 		}
@@ -2792,7 +2816,7 @@ fe_gtk4_xtext_append_for_session (session *sess, const char *text)
 	xtext_render_session = NULL;
 	session_buffer_set_dirty (sess, FALSE);
 
-	if (xtext_is_at_end ())
+	if (stick_to_end)
 		xtext_scroll_to_end ();
 }
 
