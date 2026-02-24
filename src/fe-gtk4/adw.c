@@ -66,6 +66,36 @@ adw_button_set_icon_with_fallback (GtkWidget *button, const char *icon_name, con
 		gtk_button_set_icon_name (GTK_BUTTON (button), fallback_icon_name);
 }
 
+static void
+adw_button_set_icon_with_fallbacks (GtkWidget *button,
+	const char *icon_name,
+	const char *fallback_icon_name,
+	const char *last_resort_icon_name)
+{
+	GdkDisplay *display;
+	GtkIconTheme *icon_theme;
+
+	if (!button)
+		return;
+
+	display = gdk_display_get_default ();
+	if (!display)
+	{
+		gtk_button_set_icon_name (GTK_BUTTON (button),
+			last_resort_icon_name ? last_resort_icon_name : fallback_icon_name);
+		return;
+	}
+
+	icon_theme = gtk_icon_theme_get_for_display (display);
+	if (icon_theme && icon_name && gtk_icon_theme_has_icon (icon_theme, icon_name))
+		gtk_button_set_icon_name (GTK_BUTTON (button), icon_name);
+	else if (icon_theme && fallback_icon_name && gtk_icon_theme_has_icon (icon_theme, fallback_icon_name))
+		gtk_button_set_icon_name (GTK_BUTTON (button), fallback_icon_name);
+	else
+		gtk_button_set_icon_name (GTK_BUTTON (button),
+			last_resort_icon_name ? last_resort_icon_name : fallback_icon_name);
+}
+
 gboolean
 fe_gtk4_adw_use_hamburger_menu (void)
 {
@@ -159,14 +189,18 @@ fe_gtk4_adw_sync_sidebar_button (gboolean visible)
 
 	if (visible)
 	{
-		adw_button_set_icon_with_fallback (adw_sidebar_button,
-			"sidebar-hide-left-symbolic", "view-left-pane-symbolic");
+		adw_button_set_icon_with_fallbacks (adw_sidebar_button,
+			"sidebar-hide-left-symbolic",
+			"sidebar-hide-symbolic",
+			"view-left-pane-symbolic");
 		gtk_widget_set_tooltip_text (adw_sidebar_button, _("Hide Sidebar"));
 	}
 	else
 	{
-		adw_button_set_icon_with_fallback (adw_sidebar_button,
-			"sidebar-show-left-symbolic", "view-left-pane-symbolic");
+		adw_button_set_icon_with_fallbacks (adw_sidebar_button,
+			"sidebar-show-left-symbolic",
+			"sidebar-show-symbolic",
+			"view-left-pane-symbolic");
 		gtk_widget_set_tooltip_text (adw_sidebar_button, _("Show Sidebar"));
 	}
 }
