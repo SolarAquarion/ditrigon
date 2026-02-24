@@ -1006,8 +1006,8 @@ fe_gtk4_menu_show_urlmenu (GtkWidget *parent, double x, double y, session *sess,
 	menu = g_menu_new ();
 	section = g_menu_new ();
 	g_menu_append (section, _("Open Link"), "url.open");
-	g_menu_append (section, _("Open Link in Browser"), "url.open-browser");
-	g_menu_append (section, _("Open Link in New Window"), "url.open-new-window");
+	/* g_menu_append (section, _("Open Link in Browser"), "url.open-browser"); */
+	/* g_menu_append (section, _("Open Link in New Window"), "url.open-new-window"); */
 	g_menu_append (section, _("Copy Selected Link"), "url.copy");
 	g_menu_append_section (menu, NULL, G_MENU_MODEL (section));
 	g_object_unref (section);
