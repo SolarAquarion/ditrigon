@@ -1343,7 +1343,6 @@ static void
 xtext_create_shared_tag_table (void)
 {
 	GdkRGBA stamp_rgba;
-	GdkRGBA nick_rgba;
 
 	if (shared_tag_table)
 		return;
@@ -1358,11 +1357,8 @@ xtext_create_shared_tag_table (void)
 		"underline", PANGO_UNDERLINE_SINGLE, NULL);
 	tag_link_hover = xtext_create_tag_in_table (shared_tag_table, "hc-link-hover",
 		"underline", PANGO_UNDERLINE_SINGLE, NULL);
-	xtext_color_to_rgba (18, &nick_rgba);
 	tag_nick_column = xtext_create_tag_in_table (shared_tag_table, "hc-nick-column",
-		"weight", PANGO_WEIGHT_SEMIBOLD,
-		"foreground-rgba", &nick_rgba,
-		NULL);
+		"weight", PANGO_WEIGHT_SEMIBOLD, NULL);
 	tag_message_hanging = xtext_create_tag_in_table (shared_tag_table, "hc-message-hanging",
 		"left-margin", 0,
 		"indent", 0,
@@ -1382,7 +1378,7 @@ xtext_color_to_rgba (int color_index, GdkRGBA *rgba)
 	idx = color_index;
 	if (idx < 0)
 		idx = 0;
-	if (idx >= HC_IRC_COLOR_COUNT)
+	else if (idx > MAX_COL)
 		idx %= HC_IRC_COLOR_COUNT;
 
 	rgba->red = ((double) colors[idx].red) / 65535.0;
@@ -1416,9 +1412,15 @@ xtext_get_color_tag (int fg, int bg)
 		return NULL;
 
 	if (fg >= 0)
-		fg %= HC_IRC_COLOR_COUNT;
+	{
+		if (fg > MAX_COL)
+			fg %= HC_IRC_COLOR_COUNT;
+	}
 	if (bg >= 0)
-		bg %= HC_IRC_COLOR_COUNT;
+	{
+		if (bg > MAX_COL)
+			bg %= HC_IRC_COLOR_COUNT;
+	}
 
 	key = (((guint) (fg + 1)) & HC_COLOR_KEY_MASK) | ((((guint) (bg + 1)) & HC_COLOR_KEY_MASK) << 8);
 	tag = color_tags ? g_hash_table_lookup (color_tags, GUINT_TO_POINTER (key)) : NULL;
