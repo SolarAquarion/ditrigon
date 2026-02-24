@@ -34,6 +34,12 @@ typedef struct
 	GtkWidget *view;
 } HcSessionWidget;
 
+typedef struct
+{
+	int message_col_px;
+	int stamp_col_px;
+} HcSessionTabMetrics;
+
 #define HC_STICKY_BOTTOM_EPSILON_PX 70.0
 #define HC_PREFIX_MAX_CHARS 32
 #define HC_PREFIX_MAX_WORDS 2
@@ -78,6 +84,7 @@ static GHashTable *session_buffers_dirty;
 static GHashTable *session_widgets;
 static GHashTable *session_shown_once;
 static GHashTable *session_replay_marklast;
+static GHashTable *session_tab_metrics;
 static GHashTable *color_tags;
 static GtkTextTagTable *shared_tag_table;
 static GtkTextTag *tag_stamp;
@@ -124,6 +131,8 @@ static GtkTextBuffer *xtext_create_buffer_with_marks (void);
 static void xtext_setup_view_controllers (GtkWidget *view);
 static HcSessionWidget *session_widget_ensure (session *sess);
 static void session_buffer_mark_all_dirty (void);
+static void session_tab_metrics_set (session *sess, int message_col_px, int stamp_col_px);
+static gboolean session_tab_metrics_get (session *sess, int *message_col_px, int *stamp_col_px);
 static gboolean xtext_view_is_at_end (GtkWidget *view);
 static gboolean xtext_should_stick_to_end (void);
 static void xtext_scroll_to_end_idle_finish (void);
@@ -1145,6 +1154,50 @@ session_log_free (gpointer data)
 {
 	if (data)
 		g_string_free ((GString *) data, TRUE);
+}
+
+static void
+session_tab_metrics_free (gpointer data)
+{
+	g_free (data);
+}
+
+static void
+session_tab_metrics_set (session *sess, int message_col_px, int stamp_col_px)
+{
+	HcSessionTabMetrics *metrics;
+
+	if (!session_tab_metrics || !sess || !is_session (sess))
+		return;
+
+	metrics = g_hash_table_lookup (session_tab_metrics, sess);
+	if (!metrics)
+	{
+		metrics = g_new0 (HcSessionTabMetrics, 1);
+		g_hash_table_insert (session_tab_metrics, sess, metrics);
+	}
+
+	metrics->message_col_px = message_col_px;
+	metrics->stamp_col_px = stamp_col_px;
+}
+
+static gboolean
+session_tab_metrics_get (session *sess, int *message_col_px, int *stamp_col_px)
+{
+	HcSessionTabMetrics *metrics;
+
+	if (!session_tab_metrics || !sess || !is_session (sess))
+		return FALSE;
+
+	metrics = g_hash_table_lookup (session_tab_metrics, sess);
+	if (!metrics)
+		return FALSE;
+
+	if (message_col_px)
+		*message_col_px = metrics->message_col_px;
+	if (stamp_col_px)
+		*stamp_col_px = metrics->stamp_col_px;
+	return TRUE;
 }
 
 static GString *
@@ -2232,6 +2285,8 @@ xtext_render_raw_all (GtkTextBuffer *buf, const char *raw)
 
 	text = raw ? raw : "";
 	col_px = xtext_compute_message_column_px (text, &stamp_px);
+	if (xtext_render_session)
+		session_tab_metrics_set (xtext_render_session, col_px, stamp_px);
 	/* Only update tab stops when rendering the currently visible session */
 	if (xtext_render_session == current_tab)
 		xtext_set_message_tab_stop (col_px, stamp_px);
@@ -2557,8 +2612,12 @@ xtext_show_session_rendered (session *sess)
 	}
 	else
 	{
-		/* Buffer already has content; just recompute tab stop */
-		col_px = xtext_compute_message_column_px (log ? log->str : "", &stamp_px);
+		/* Buffer already has content; reuse cached tab metrics. */
+		if (!session_tab_metrics_get (sess, &col_px, &stamp_px))
+		{
+			col_px = xtext_compute_message_column_px (log ? log->str : "", &stamp_px);
+			session_tab_metrics_set (sess, col_px, stamp_px);
+		}
 		xtext_set_message_tab_stop (col_px, stamp_px);
 		if (first_show)
 		{
@@ -2740,6 +2799,9 @@ fe_gtk4_xtext_init (void)
 		session_shown_once = g_hash_table_new (g_direct_hash, g_direct_equal);
 	if (!session_replay_marklast)
 		session_replay_marklast = g_hash_table_new (g_direct_hash, g_direct_equal);
+	if (!session_tab_metrics)
+		session_tab_metrics = g_hash_table_new_full (g_direct_hash, g_direct_equal,
+			NULL, session_tab_metrics_free);
 	if (!color_tags)
 		color_tags = g_hash_table_new (g_direct_hash, g_direct_equal);
 	xtext_create_shared_tag_table ();
@@ -2788,6 +2850,11 @@ fe_gtk4_xtext_cleanup (void)
 	{
 		g_hash_table_unref (session_replay_marklast);
 		session_replay_marklast = NULL;
+	}
+	if (session_tab_metrics)
+	{
+		g_hash_table_unref (session_tab_metrics);
+		session_tab_metrics = NULL;
 	}
 	if (color_tags)
 	{
@@ -2976,6 +3043,20 @@ fe_gtk4_xtext_append_for_session (session *sess, const char *text)
 			return;
 		}
 
+		{
+			int added_col_px;
+			int added_stamp_px;
+			int cached_col_px;
+			int cached_stamp_px;
+
+			added_col_px = xtext_compute_message_column_px (text, &added_stamp_px);
+			if (session_tab_metrics_get (sess, &cached_col_px, &cached_stamp_px))
+				session_tab_metrics_set (sess, MAX (added_col_px, cached_col_px),
+					MAX (added_stamp_px, cached_stamp_px));
+			else
+				session_tab_metrics_set (sess, added_col_px, added_stamp_px);
+		}
+
 		xtext_render_session = sess;
 		xtext_render_raw_append (buf, text);
 		xtext_render_session = NULL;
@@ -3017,6 +3098,7 @@ fe_gtk4_xtext_append_for_session (session *sess, const char *text)
 	xtext_render_raw_append (buf, text);
 	xtext_render_session = NULL;
 	session_buffer_set_dirty (sess, FALSE);
+	session_tab_metrics_set (sess, xtext_message_col_px, xtext_stamp_col_px);
 
 	if (stick_to_end)
 		xtext_scroll_to_end ();
@@ -3073,6 +3155,9 @@ fe_gtk4_xtext_remove_session (session *sess)
 
 	if (session_replay_marklast)
 		g_hash_table_remove (session_replay_marklast, sess);
+
+	if (session_tab_metrics)
+		g_hash_table_remove (session_tab_metrics, sess);
 
 	if (session_widgets)
 	{
