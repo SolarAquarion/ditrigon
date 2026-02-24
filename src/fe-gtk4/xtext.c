@@ -160,6 +160,11 @@ static void xtext_render_line_columns (GtkTextBuffer *buf, GtkTextIter *iter,
 	const char *line, gsize len, HcLineColumns *cols);
 static void xtext_apply_hanging_tag_for_line (GtkTextBuffer *buf, GtkTextIter *iter,
 	GtkTextMark *line_start_mark, gboolean append_newline, gboolean has_columns);
+static void xtext_style_toggle_control (unsigned char ch, HcTextStyle *style);
+static gsize xtext_style_parse_color_control (const char *text, gsize len, gsize index,
+	HcTextStyle *style);
+static gsize xtext_style_skip_hex_color_control (const char *text, gsize len, gsize index,
+	HcTextStyle *style);
 
 static inline gboolean
 xtext_session_is_valid (const session *sess)
@@ -2006,6 +2011,83 @@ xtext_insert_plain_char (GtkTextBuffer *buf, GtkTextIter *iter, char ch)
 	xtext_insert_plain_text (buf, iter, s, 1, FALSE);
 }
 
+static void
+xtext_style_toggle_control (unsigned char ch, HcTextStyle *style)
+{
+	if (!style)
+		return;
+
+	switch (ch)
+	{
+	case HC_IRC_CTRL_BOLD:
+		style->bold = !style->bold;
+		break;
+	case HC_IRC_CTRL_ITALIC:
+		style->italic = !style->italic;
+		break;
+	case HC_IRC_CTRL_UNDERLINE:
+		style->underline = !style->underline;
+		break;
+	case HC_IRC_CTRL_REVERSE:
+		style->reverse = !style->reverse;
+		break;
+	case HC_IRC_CTRL_RESET:
+		xtext_reset_style (style);
+		break;
+	default:
+		break;
+	}
+}
+
+static gsize
+xtext_style_parse_color_control (const char *text, gsize len, gsize index, HcTextStyle *style)
+{
+	int fg;
+	int bg;
+	gsize j;
+
+	if (!text || !style)
+		return index + 1;
+
+	j = index + 1;
+	if (!xtext_parse_color_number (text, len, &j, &fg))
+	{
+		style->fg = -1;
+		style->bg = -1;
+		return j;
+	}
+
+	style->fg = (fg == HC_IRC_COLOR_DEFAULT) ? HC_STYLE_COLOR_DEFAULT_FG : fg;
+	if (j < len && text[j] == ',')
+	{
+		j++;
+		if (xtext_parse_color_number (text, len, &j, &bg))
+			style->bg = (bg == HC_IRC_COLOR_DEFAULT) ? HC_STYLE_COLOR_DEFAULT_BG : bg;
+		else
+			style->bg = -1;
+	}
+
+	return j;
+}
+
+static gsize
+xtext_style_skip_hex_color_control (const char *text, gsize len, gsize index, HcTextStyle *style)
+{
+	gsize j;
+
+	if (!text || !style)
+		return index + 1;
+
+	j = index + 1;
+	while (j < len && (g_ascii_isxdigit (text[j]) || text[j] == ','))
+		j++;
+
+	style->fg = -1;
+	style->bg = -1;
+
+	return j;
+}
+
 static gboolean
 xtext_parse_color_number (const char *text, gsize len, gsize *index, int *value)
 {
@@ -2059,74 +2141,28 @@ xtext_render_formatted_stateful (GtkTextBuffer *buf, GtkTextIter *iter, const ch
 		case HC_IRC_CTRL_UNDERLINE:
 		case HC_IRC_CTRL_REVERSE:
 		case HC_IRC_CTRL_RESET:
+		{
+			if (i > seg_start)
+				xtext_insert_segment (buf, iter, text + seg_start, i - seg_start, &style, layout_tag);
+			xtext_style_toggle_control (ch, &style);
+			i++;
+			seg_start = i;
+			continue;
+		}
 		case HC_IRC_CTRL_COLOR:
+		{
+			if (i > seg_start)
+				xtext_insert_segment (buf, iter, text + seg_start, i - seg_start, &style, layout_tag);
+			i = xtext_style_parse_color_control (text, len, i, &style);
+			seg_start = i;
+			continue;
+		}
 		case HC_IRC_CTRL_HEX_COLOR:
 		{
 			if (i > seg_start)
 				xtext_insert_segment (buf, iter, text + seg_start, i - seg_start, &style, layout_tag);
-			switch (ch)
-			{
-			case HC_IRC_CTRL_BOLD:
-				style.bold = !style.bold;
-				i++;
-				break;
-			case HC_IRC_CTRL_ITALIC:
-				style.italic = !style.italic;
-				i++;
-				break;
-			case HC_IRC_CTRL_UNDERLINE:
-				style.underline = !style.underline;
-				i++;
-				break;
-			case HC_IRC_CTRL_REVERSE:
-				style.reverse = !style.reverse;
-				i++;
-				break;
-			case HC_IRC_CTRL_RESET:
-				xtext_reset_style (&style);
-				i++;
-				break;
-			case HC_IRC_CTRL_COLOR:
-			{
-				int fg;
-				int bg;
-				gsize j;
-
-				j = i + 1;
-				if (!xtext_parse_color_number (text, len, &j, &fg))
-				{
-					style.fg = -1;
-					style.bg = -1;
-					i = j;
-					break;
-				}
-
-				style.fg = (fg == HC_IRC_COLOR_DEFAULT) ? HC_STYLE_COLOR_DEFAULT_FG : fg;
-				if (j < len && text[j] == ',')
-				{
-					j++;
-					if (xtext_parse_color_number (text, len, &j, &bg))
-						style.bg = (bg == HC_IRC_COLOR_DEFAULT) ? HC_STYLE_COLOR_DEFAULT_BG : bg;
-					else
-						style.bg = -1;
-				}
-				i = j;
-				break;
-			}
-			default:
-			{
-				gsize j;
-
-				/* Hex color sequence (rare); strip it safely. */
-				j = i + 1;
-				while (j < len && (g_ascii_isxdigit (text[j]) || text[j] == ','))
-					j++;
-				style.fg = -1;
-				style.bg = -1;
-				i = j;
-				break;
-			}
-			}
+			/* Hex color sequence (rare); strip it safely. */
+			i = xtext_style_skip_hex_color_control (text, len, i, &style);
 			seg_start = i;
 			continue;
 		}
