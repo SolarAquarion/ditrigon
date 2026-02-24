@@ -33,6 +33,7 @@ static GtkWidget *userlist_scroller;
 static GtkWidget *userlist_view;
 static GtkWidget *userlist_empty_page;
 static GHashTable *session_stores;     /* session * -> GListStore * */
+static GHashTable *session_bulk_rebuild; /* session * -> gboolean */
 static GtkCustomFilter *userlist_filter;
 static GtkFilterListModel *userlist_filter_model;
 static GtkMultiSelection *userlist_selection;
@@ -43,6 +44,36 @@ static gboolean userlist_pending_hide;
 static char *userlist_filter_folded;
 
 static void userlist_update_info_label (session *sess);
+
+static gboolean
+userlist_bulk_rebuild_pending (session *sess)
+{
+	if (!session_bulk_rebuild || !sess)
+		return FALSE;
+
+	return g_hash_table_contains (session_bulk_rebuild, sess);
+}
+
+static void
+userlist_mark_bulk_rebuild (session *sess)
+{
+	if (!sess)
+		return;
+
+	if (!session_bulk_rebuild)
+		session_bulk_rebuild = g_hash_table_new (NULL, NULL);
+
+	g_hash_table_insert (session_bulk_rebuild, sess, GINT_TO_POINTER (TRUE));
+}
+
+static void
+userlist_unmark_bulk_rebuild (session *sess)
+{
+	if (!session_bulk_rebuild || !sess)
+		return;
+
+	g_hash_table_remove (session_bulk_rebuild, sess);
+}
 
 static GListStore *
 get_session_store (session *sess)
@@ -635,6 +666,19 @@ store_find_insert_position (GListStore *store, session *sess, struct User *user)
 }
 
 static void
+store_append_row (GListStore *store, session *sess, struct User *user)
+{
+	HcUserItem *item;
+
+	if (!store || !user)
+		return;
+
+	item = hc_user_item_new (sess, user);
+	g_list_store_append (store, item);
+	g_object_unref (item);
+}
+
+static void
 store_insert_row (GListStore *store, session *sess, struct User *user, gboolean selected)
 {
 	HcUserItem *item;
@@ -672,6 +716,52 @@ store_row_upsert (GListStore *store, session *sess, struct User *user, gboolean 
 	store_insert_row (store, sess, user, selected);
 }
 
+static gint
+store_populate_compare_cb (gconstpointer left, gconstpointer right, gpointer user_data)
+{
+	return user_sort_compare ((session *) user_data,
+		(struct User *) left, (struct User *) right);
+}
+
+static void
+store_populate_from_session (GListStore *store, session *sess)
+{
+	GSList *list;
+	GSList *iter;
+
+	if (!store || !sess || !userlist_session_supports_members (sess))
+		return;
+
+	list = userlist_flat_list (sess);
+	list = g_slist_sort_with_data (list, store_populate_compare_cb, sess);
+
+	for (iter = list; iter; iter = iter->next)
+	{
+		struct User *user = iter->data;
+
+		if (user)
+			store_append_row (store, sess, user);
+	}
+
+	g_slist_free (list);
+}
+
+static void
+store_rebuild_for_session (session *sess)
+{
+	GListStore *store;
+
+	if (!sess)
+		return;
+
+	if (!session_stores)
+		session_stores = g_hash_table_new_full (NULL, NULL, NULL, g_object_unref);
+
+	store = g_list_store_new (HC_TYPE_USER_ITEM);
+	store_populate_from_session (store, sess);
+	g_hash_table_replace (session_stores, sess, store);
+}
+
 static GListStore *
 get_or_create_session_store (session *sess)
 {
@@ -690,20 +780,8 @@ get_or_create_session_store (session *sess)
 	store = g_list_store_new (HC_TYPE_USER_ITEM);
 	g_hash_table_insert (session_stores, sess, store);
 
-	/* Populate from the session's existing user tree */
-	if (userlist_session_supports_members (sess))
-	{
-		GSList *list;
-
-		list = userlist_flat_list (sess);
-		for (; list; list = list->next)
-		{
-			struct User *user = list->data;
-			if (user)
-				store_insert_row (store, sess, user, user->selected ? TRUE : FALSE);
-		}
-		g_slist_free (list);
-	}
+	/* Populate from the session's existing user tree in one sorted pass. */
+	store_populate_from_session (store, sess);
 
 	return store;
 }
@@ -1059,6 +1137,7 @@ void
 fe_gtk4_userlist_cleanup (void)
 {
 	g_clear_pointer (&session_stores, g_hash_table_destroy);
+	g_clear_pointer (&session_bulk_rebuild, g_hash_table_destroy);
 	g_clear_object (&userlist_filter_model);
 	g_clear_object (&userlist_filter);
 	g_clear_object (&userlist_selection);
@@ -1188,7 +1267,12 @@ fe_gtk4_userlist_show (session *sess)
 void
 fe_gtk4_userlist_remove_session (session *sess)
 {
-	if (!sess || !session_stores)
+	if (!sess)
+		return;
+
+	userlist_unmark_bulk_rebuild (sess);
+
+	if (!session_stores)
 		return;
 
 	if (sess == userlist_session)
@@ -1237,8 +1321,15 @@ fe_userlist_insert (struct session *sess, struct User *newuser, gboolean sel)
 {
 	GListStore *store;
 
-	if (!newuser)
+	if (!sess || !newuser)
 		return;
+
+	/* During initial NAMES, defer model churn and rebuild once at end-of-names. */
+	if (sess->ignore_names && !sess->end_of_names)
+	{
+		userlist_mark_bulk_rebuild (sess);
+		return;
+	}
 
 	if (sel)
 		newuser->selected = 1;
@@ -1261,6 +1352,9 @@ fe_userlist_remove (struct session *sess, struct User *user)
 
 	selected = user->selected ? TRUE : FALSE;
 
+	if (sess && userlist_bulk_rebuild_pending (sess))
+		return selected ? 1 : 0;
+
 	store = get_session_store (sess);
 	if (store)
 		store_remove_row_by_user (store, user, &selected);
@@ -1274,6 +1368,9 @@ fe_userlist_rehash (struct session *sess, struct User *user)
 	GListStore *store;
 
 	if (!sess || !user)
+		return;
+
+	if (userlist_bulk_rebuild_pending (sess))
 		return;
 
 	store = get_session_store (sess);
@@ -1295,6 +1392,23 @@ fe_userlist_numbers (struct session *sess)
 	if (!sess)
 		return;
 
+	if (sess->end_of_names && userlist_bulk_rebuild_pending (sess))
+	{
+		store_rebuild_for_session (sess);
+		userlist_unmark_bulk_rebuild (sess);
+
+		if (sess == userlist_session && userlist_filter_model)
+		{
+			GListStore *store;
+
+			store = get_session_store (sess);
+			gtk_filter_list_model_set_model (userlist_filter_model, G_LIST_MODEL (store));
+			if (userlist_filter)
+				gtk_filter_changed (GTK_FILTER (userlist_filter), GTK_FILTER_CHANGE_DIFFERENT);
+			userlist_sync_visible_selection_from_users ();
+		}
+	}
+
 	if (sess == userlist_session)
 		userlist_update_info_label (sess);
 
@@ -1309,6 +1423,8 @@ fe_userlist_clear (struct session *sess)
 
 	if (!sess)
 		return;
+
+	userlist_unmark_bulk_rebuild (sess);
 
 	store = get_session_store (sess);
 	if (!store)
