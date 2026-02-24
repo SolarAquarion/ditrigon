@@ -1351,6 +1351,8 @@ fe_new_window (struct session *sess, int focus)
 		g_idle_add (fe_idle, NULL);
 #endif
 
+	sess->scrollback_replay_marklast = fe_gtk4_xtext_set_marker_last;
+
 	if (done_intro)
 		return;
 	done_intro = 1;
@@ -1882,8 +1884,6 @@ fe_gtk4_session_switch_to (session *sess)
 		return;
 
 	prev = current_tab;
-	if (prev && prev != sess)
-		fe_gtk4_xtext_save_scroll_position (prev);
 	current_sess = sess;
 	current_tab = sess;
 	if (sess->server)
