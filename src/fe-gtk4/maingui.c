@@ -706,6 +706,7 @@ fe_gtk4_maingui_set_left_sidebar_visible (gboolean visible)
 	AdwNavigationSplitView *split;
 
 	left_sidebar_visible = visible ? TRUE : FALSE;
+	prefs.hex_gui_sidebar_hide = left_sidebar_visible ? 0 : 1;
 
 	if (!content_paned || !maingui_uses_navigation_split ())
 	{
@@ -801,13 +802,20 @@ right_pane_pos_cb (GtkPaned *pane, GParamSpec *pspec, gpointer user_data)
 	(void) pspec;
 	(void) user_data;
 
-	if (!pane_positions_ready || prefs.hex_gui_ulist_hide || userlist_split_animating)
+	if (!pane_positions_ready || userlist_split_animating)
 		return;
 
 	width = gtk_widget_get_width (GTK_WIDGET (pane));
 	pos = gtk_paned_get_position (pane);
 	if (width <= 0 || pos < 0)
 		return;
+
+	if (prefs.hex_gui_ulist_hide)
+	{
+		if (pos != width)
+			gtk_paned_set_position (pane, width);
+		return;
+	}
 
 	wanted_right = width - pos;
 	right_size = maingui_right_pane_clamp_size (wanted_right);
@@ -904,10 +912,17 @@ apply_initial_panes_cb (gpointer userdata)
 		fe_gtk4_maingui_set_left_sidebar_visible (left_sidebar_visible);
 	}
 
-	pos = width - right_size;
-	pos = CLAMP (pos, 0, MAX (0, width - 1));
+	if (prefs.hex_gui_ulist_hide)
+		pos = width;
+	else
+	{
+		pos = width - right_size;
+		pos = CLAMP (pos, 0, MAX (0, width - 1));
+	}
+
 	gtk_paned_set_position (GTK_PANED (main_right_paned), pos);
-	prefs.hex_gui_pane_right_size = width - pos;
+	if (!prefs.hex_gui_ulist_hide)
+		prefs.hex_gui_pane_right_size = width - pos;
 	pane_positions_ready = TRUE;
 
 	return G_SOURCE_REMOVE;
@@ -917,6 +932,7 @@ void
 fe_gtk4_maingui_init (void)
 {
 	pane_positions_ready = FALSE;
+	left_sidebar_visible = prefs.hex_gui_sidebar_hide ? FALSE : TRUE;
 	if (!disconnect_preserve_servers)
 		disconnect_preserve_servers = g_hash_table_new (g_direct_hash, g_direct_equal);
 	fe_gtk4_chanview_init ();
@@ -948,7 +964,7 @@ fe_gtk4_maingui_cleanup (void)
 	userlist_split_anim_start_us = 0;
 	userlist_split_anim_from = 0;
 	userlist_split_anim_to = 0;
-	left_sidebar_visible = TRUE;
+	left_sidebar_visible = prefs.hex_gui_sidebar_hide ? FALSE : TRUE;
 	g_clear_pointer (&disconnect_preserve_servers, g_hash_table_unref);
 }
 
@@ -1140,6 +1156,8 @@ fe_gtk4_create_main_window (void)
 
 	if (main_window)
 		return;
+
+	left_sidebar_visible = prefs.hex_gui_sidebar_hide ? FALSE : TRUE;
 
 	main_window = fe_gtk4_adw_window_new ();
 	gtk_window_set_title (GTK_WINDOW (main_window), PACKAGE_NAME);
