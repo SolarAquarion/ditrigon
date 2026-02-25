@@ -802,13 +802,20 @@ right_pane_pos_cb (GtkPaned *pane, GParamSpec *pspec, gpointer user_data)
 	(void) pspec;
 	(void) user_data;
 
-	if (!pane_positions_ready || prefs.hex_gui_ulist_hide || userlist_split_animating)
+	if (!pane_positions_ready || userlist_split_animating)
 		return;
 
 	width = gtk_widget_get_width (GTK_WIDGET (pane));
 	pos = gtk_paned_get_position (pane);
 	if (width <= 0 || pos < 0)
 		return;
+
+	if (prefs.hex_gui_ulist_hide)
+	{
+		if (pos != width)
+			gtk_paned_set_position (pane, width);
+		return;
+	}
 
 	wanted_right = width - pos;
 	right_size = maingui_right_pane_clamp_size (wanted_right);
@@ -905,10 +912,17 @@ apply_initial_panes_cb (gpointer userdata)
 		fe_gtk4_maingui_set_left_sidebar_visible (left_sidebar_visible);
 	}
 
-	pos = width - right_size;
-	pos = CLAMP (pos, 0, MAX (0, width - 1));
+	if (prefs.hex_gui_ulist_hide)
+		pos = width;
+	else
+	{
+		pos = width - right_size;
+		pos = CLAMP (pos, 0, MAX (0, width - 1));
+	}
+
 	gtk_paned_set_position (GTK_PANED (main_right_paned), pos);
-	prefs.hex_gui_pane_right_size = width - pos;
+	if (!prefs.hex_gui_ulist_hide)
+		prefs.hex_gui_pane_right_size = width - pos;
 	pane_positions_ready = TRUE;
 
 	return G_SOURCE_REMOVE;
