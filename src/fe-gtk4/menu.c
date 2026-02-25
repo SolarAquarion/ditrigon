@@ -592,10 +592,10 @@ nick_menu_create_info_popover (GtkWidget *relative_to, session *sess, const char
 	nick_menu_append_info_row (grid, 1, _("User:"), host);
 	nick_menu_append_info_row (grid, 2, _("Account:"), account);
 	users_country = country (user->hostname);
-	if (users_country && users_country[0])
-		nick_menu_append_info_row (grid, 3, _("Country:"), users_country);
-	nick_menu_append_info_row (grid, users_country && users_country[0] ? 4 : 3, _("Server:"), serv);
-	nick_menu_append_info_row (grid, users_country && users_country[0] ? 5 : 4, _("Last Msg:"), last_msg);
+	nick_menu_append_info_row (grid, 3, _("Country:"),
+							   (users_country && users_country[0]) ? users_country : _("Unknown"));
+	nick_menu_append_info_row (grid, 4, _("Server:"), serv);
+	nick_menu_append_info_row (grid, 5, _("Last Msg:"), last_msg);
 
 	g_free (real);
 	return popover;
@@ -829,6 +829,7 @@ fe_gtk4_menu_show_nickmenu (GtkWidget *parent, double x, double y, session *sess
 	/* Create the popover */
 	gtk_widget_insert_action_group (popover_parent, "nick", G_ACTION_GROUP (group));
 	active_nick_popover = gtk_popover_menu_new_from_model (G_MENU_MODEL (menu));
+	gtk_widget_add_css_class (active_nick_popover, "hc-nick-context-popover");
 	g_object_add_weak_pointer (G_OBJECT (active_nick_popover),
 		(gpointer *) &active_nick_popover);
 	gtk_widget_set_parent (active_nick_popover, popover_parent);
