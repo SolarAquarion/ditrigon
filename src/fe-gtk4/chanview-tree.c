@@ -90,6 +90,7 @@ tree_load_css (void)
 	gtk_css_provider_load_from_string (provider,
 		".hc-tree-row { border-radius: 8px; min-height: 28px; padding: 1px 2px; }"
 		".hc-tree-context-target { border-radius: 8px; background-color: alpha(@accent_bg_color, 0.16); box-shadow: inset 0 0 0 1px alpha(@accent_bg_color, 0.36); }"
+		".hc-tree-context-popover scrolledwindow { min-width: 200px; min-height: 350px; }"
 		".hc-tree-label { padding: 1px 0; }"
 		".hc-tree-subtitle { padding: 0; font-size: 0.82em; }"
 		".hc-tree-icon { opacity: 0.72; }"
@@ -870,6 +871,7 @@ tree_show_context_menu (GtkWidget *parent, double x, double y, session *sess, Gt
 
 	/* Create the popover menu */
 	tree_ctx_popover = gtk_popover_menu_new_from_model (G_MENU_MODEL (menu));
+	gtk_widget_add_css_class (tree_ctx_popover, "hc-tree-context-popover");
 	g_object_add_weak_pointer (G_OBJECT (tree_ctx_popover),
 		(gpointer *) &tree_ctx_popover);
 	g_signal_connect (tree_ctx_popover, "closed",

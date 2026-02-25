@@ -345,6 +345,10 @@ maingui_install_css (void)
 		".hc-input-send:disabled {\n"
 		"  background-color: transparent;\n"
 		"  color: alpha(currentColor, 0.45);\n"
+		"}\n"
+		".hc-nick-context-popover scrolledwindow {\n"
+		"  min-width: 340px;\n"
+		"  min-height: 415px;\n"
 		"}\n";
 
 	maingui_css_provider = gtk_css_provider_new ();
