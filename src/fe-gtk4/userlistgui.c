@@ -8,6 +8,7 @@
 #include "../common/userlist.h"
 
 #define USERLIST_SHELL_UI_PATH "/org/ditrigon/ui/gtk4/maingui/userlist-shell.ui"
+#define USERLIST_ROW_UI_PATH "/org/ditrigon/ui/gtk4/rows/userlist-row.ui"
 
 typedef struct _HcUserItem
 {
@@ -941,9 +942,9 @@ userlist_row_right_click_cb (GtkGestureClick *gesture, int n_press, double x, do
 static void
 userlist_factory_setup_cb (GtkSignalListItemFactory *factory, GtkListItem *list_item, gpointer user_data)
 {
+	GtkBuilder *builder;
 	GtkWidget *row;
 	GtkWidget *presence_image;
-	GtkWidget *content_box;
 	GtkWidget *name_label;
 	GtkWidget *host_label;
 	GtkWidget *badge_label;
@@ -952,40 +953,14 @@ userlist_factory_setup_cb (GtkSignalListItemFactory *factory, GtkListItem *list_
 	(void) factory;
 	(void) user_data;
 
-	row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
-	gtk_widget_add_css_class (row, "hc-user-row");
-	gtk_widget_set_margin_start (row, 6);
-	gtk_widget_set_margin_end (row, 6);
-	gtk_widget_set_margin_top (row, 2);
-	gtk_widget_set_margin_bottom (row, 2);
-
-	presence_image = gtk_image_new ();
-	gtk_widget_set_valign (presence_image, GTK_ALIGN_CENTER);
-	gtk_box_append (GTK_BOX (row), presence_image);
-
-	content_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
-	gtk_widget_set_hexpand (content_box, TRUE);
-	gtk_widget_set_valign (content_box, GTK_ALIGN_CENTER);
-	gtk_box_append (GTK_BOX (row), content_box);
-
-	name_label = gtk_label_new ("");
-	gtk_label_set_xalign (GTK_LABEL (name_label), 0.0f);
-	gtk_label_set_ellipsize (GTK_LABEL (name_label), PANGO_ELLIPSIZE_END);
-	gtk_box_append (GTK_BOX (content_box), name_label);
-
-	host_label = gtk_label_new ("");
-	gtk_label_set_xalign (GTK_LABEL (host_label), 0.0f);
-	gtk_label_set_ellipsize (GTK_LABEL (host_label), PANGO_ELLIPSIZE_END);
-	gtk_widget_add_css_class (host_label, "dim-label");
-	gtk_widget_add_css_class (host_label, "caption");
-	gtk_widget_add_css_class (host_label, "hc-user-host");
-	gtk_box_append (GTK_BOX (content_box), host_label);
-
-	badge_label = gtk_label_new ("");
-	gtk_widget_set_valign (badge_label, GTK_ALIGN_CENTER);
-	gtk_widget_add_css_class (badge_label, "hc-user-role-badge");
-	gtk_widget_set_visible (badge_label, FALSE);
-	gtk_box_append (GTK_BOX (row), badge_label);
+	builder = fe_gtk4_builder_new_from_resource (USERLIST_ROW_UI_PATH);
+	row = fe_gtk4_builder_get_widget (builder, "userlist_row", GTK_TYPE_BOX);
+	presence_image = fe_gtk4_builder_get_widget (builder, "userlist_presence_image", GTK_TYPE_IMAGE);
+	name_label = fe_gtk4_builder_get_widget (builder, "userlist_name_label", GTK_TYPE_LABEL);
+	host_label = fe_gtk4_builder_get_widget (builder, "userlist_host_label", GTK_TYPE_LABEL);
+	badge_label = fe_gtk4_builder_get_widget (builder, "userlist_badge_label", GTK_TYPE_LABEL);
+	g_object_ref_sink (row);
+	g_object_unref (builder);
 
 	g_object_set_data (G_OBJECT (list_item), "hc-user-presence", presence_image);
 	g_object_set_data (G_OBJECT (list_item), "hc-user-name", name_label);
