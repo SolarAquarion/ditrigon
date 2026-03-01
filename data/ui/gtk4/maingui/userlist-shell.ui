@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<interface>
+  <requires lib="gtk" version="4.0"/>
+  <requires lib="Adw" version="1.0"/>
+
+  <object class="GtkRevealer" id="userlist_revealer">
+    <property name="visible">True</property>
+    <property name="hexpand">False</property>
+    <property name="vexpand">True</property>
+    <property name="transition-type">slide-left</property>
+    <property name="transition-duration">250</property>
+    <property name="child">
+      <object class="GtkBox" id="userlist_panel">
+        <property name="orientation">vertical</property>
+        <property name="spacing">0</property>
+        <child>
+          <object class="GtkLabel" id="userlist_info_label">
+            <property name="xalign">0.0</property>
+            <property name="use-markup">True</property>
+            <property name="margin-start">8</property>
+            <property name="margin-end">8</property>
+            <property name="margin-top">8</property>
+            <property name="margin-bottom">4</property>
+          </object>
+        </child>
+        <child>
+          <object class="GtkSearchEntry" id="userlist_search_entry">
+            <property name="margin-start">8</property>
+            <property name="margin-end">8</property>
+            <property name="margin-top">2</property>
+            <property name="margin-bottom">8</property>
+          </object>
+        </child>
+        <child>
+          <object class="GtkScrolledWindow" id="userlist_scroller">
+            <property name="hexpand">False</property>
+            <property name="vexpand">True</property>
+            <property name="hscrollbar-policy">never</property>
+            <property name="vscrollbar-policy">automatic</property>
+          </object>
+        </child>
+        <child>
+          <object class="AdwStatusPage" id="userlist_empty_page">
+            <property name="hexpand">True</property>
+            <property name="vexpand">True</property>
+            <property name="margin-start">8</property>
+            <property name="margin-end">8</property>
+            <property name="margin-bottom">8</property>
+            <style>
+              <class name="hc-userlist-empty"/>
+            </style>
+          </object>
+        </child>
+      </object>
+    </property>
+  </object>
+</interface>

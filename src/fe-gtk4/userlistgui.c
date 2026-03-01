@@ -7,6 +7,8 @@
 #include "../common/text.h"
 #include "../common/userlist.h"
 
+#define USERLIST_SHELL_UI_PATH "/org/ditrigon/ui/gtk4/maingui/userlist-shell.ui"
+
 typedef struct _HcUserItem
 {
 	GObject parent_instance;
@@ -1147,6 +1149,7 @@ GtkWidget *
 fe_gtk4_userlist_create_widget (void)
 {
 	GtkListItemFactory *factory;
+	GtkBuilder *builder;
 	int right_size;
 
 	right_size = MAX (prefs.hex_gui_pane_right_size, prefs.hex_gui_pane_right_size_min);
@@ -1157,55 +1160,26 @@ fe_gtk4_userlist_create_widget (void)
 
 	if (!userlist_revealer)
 	{
-		userlist_revealer = gtk_revealer_new ();
-		gtk_widget_set_hexpand (userlist_revealer, FALSE);
-		gtk_widget_set_vexpand (userlist_revealer, TRUE);
-		gtk_revealer_set_transition_type (GTK_REVEALER (userlist_revealer), GTK_REVEALER_TRANSITION_TYPE_SLIDE_LEFT);
-		gtk_revealer_set_transition_duration (GTK_REVEALER (userlist_revealer), 250);
-		gtk_widget_set_visible (userlist_revealer, TRUE);
+		builder = fe_gtk4_builder_new_from_resource (USERLIST_SHELL_UI_PATH);
+		userlist_revealer = fe_gtk4_builder_get_widget (builder, "userlist_revealer", GTK_TYPE_REVEALER);
+		userlist_panel = fe_gtk4_builder_get_widget (builder, "userlist_panel", GTK_TYPE_BOX);
+		userlist_info_label = fe_gtk4_builder_get_widget (builder, "userlist_info_label", GTK_TYPE_LABEL);
+		userlist_search_entry = fe_gtk4_builder_get_widget (builder, "userlist_search_entry", GTK_TYPE_SEARCH_ENTRY);
+		userlist_scroller = fe_gtk4_builder_get_widget (builder, "userlist_scroller", GTK_TYPE_SCROLLED_WINDOW);
+		userlist_empty_page = fe_gtk4_builder_get_widget (builder, "userlist_empty_page", ADW_TYPE_STATUS_PAGE);
+		g_object_ref_sink (userlist_revealer);
+		g_object_unref (builder);
+
 		g_signal_connect (userlist_revealer, "notify::child-revealed",
 			G_CALLBACK (userlist_revealer_child_revealed_cb), NULL);
-	}
 
-	if (!userlist_panel)
-	{
-		userlist_panel = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
-		gtk_widget_set_size_request (userlist_panel, right_size, -1);
-
-		userlist_info_label = gtk_label_new (NULL);
-		gtk_label_set_xalign (GTK_LABEL (userlist_info_label), 0.0f);
-		gtk_widget_set_margin_start (userlist_info_label, 8);
-		gtk_widget_set_margin_end (userlist_info_label, 8);
-		gtk_widget_set_margin_top (userlist_info_label, 8);
-		gtk_widget_set_margin_bottom (userlist_info_label, 4);
-		gtk_label_set_use_markup (GTK_LABEL (userlist_info_label), TRUE);
-		gtk_box_append (GTK_BOX (userlist_panel), userlist_info_label);
-
-		userlist_search_entry = gtk_search_entry_new ();
-		gtk_widget_set_margin_start (userlist_search_entry, 8);
-		gtk_widget_set_margin_end (userlist_search_entry, 8);
-		gtk_widget_set_margin_top (userlist_search_entry, 2);
-		gtk_widget_set_margin_bottom (userlist_search_entry, 8);
 		gtk_search_entry_set_placeholder_text (GTK_SEARCH_ENTRY (userlist_search_entry), _("Search Users"));
 		gtk_editable_set_text (GTK_EDITABLE (userlist_search_entry), "");
-		gtk_box_append (GTK_BOX (userlist_panel), userlist_search_entry);
+	}
 
-		userlist_scroller = gtk_scrolled_window_new ();
-		gtk_widget_set_hexpand (userlist_scroller, FALSE);
-		gtk_widget_set_vexpand (userlist_scroller, TRUE);
-		gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (userlist_scroller),
-			GTK_POLICY_NEVER,
-			GTK_POLICY_AUTOMATIC);
-		gtk_box_append (GTK_BOX (userlist_panel), userlist_scroller);
-
-		userlist_empty_page = adw_status_page_new ();
-		gtk_widget_add_css_class (userlist_empty_page, "hc-userlist-empty");
-		gtk_widget_set_hexpand (userlist_empty_page, TRUE);
-		gtk_widget_set_vexpand (userlist_empty_page, TRUE);
-		gtk_widget_set_margin_start (userlist_empty_page, 8);
-		gtk_widget_set_margin_end (userlist_empty_page, 8);
-		gtk_widget_set_margin_bottom (userlist_empty_page, 8);
-		gtk_box_append (GTK_BOX (userlist_panel), userlist_empty_page);
+	if (!userlist_view)
+	{
+		gtk_widget_set_size_request (userlist_panel, right_size, -1);
 
 		userlist_filter = gtk_custom_filter_new (userlist_filter_match_cb, NULL, NULL);
 		userlist_filter_model = gtk_filter_list_model_new (
@@ -1231,8 +1205,6 @@ fe_gtk4_userlist_create_widget (void)
 		g_signal_connect (userlist_view, "activate", G_CALLBACK (userlist_activate_cb), NULL);
 		g_signal_connect (userlist_search_entry, "changed",
 			G_CALLBACK (userlist_search_changed_cb), NULL);
-
-		gtk_revealer_set_child (GTK_REVEALER (userlist_revealer), userlist_panel);
 	}
 	else
 	{
