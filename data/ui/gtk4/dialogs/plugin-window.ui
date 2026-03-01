@@ -5,6 +5,7 @@
   <object class="GtkWindow" id="plugin_window">
     <property name="default-width">720</property>
     <property name="default-height">440</property>
+    <property name="title" translatable="yes">Plugins and Scripts</property>
     <property name="child">
       <object class="GtkBox" id="plugin_root">
         <property name="orientation">vertical</property>
@@ -30,16 +31,24 @@
             <property name="spacing">6</property>
             <property name="halign">end</property>
             <child>
-              <object class="GtkButton" id="plugin_load_button"/>
+              <object class="GtkButton" id="plugin_load_button">
+                <property name="label" translatable="yes">Load...</property>
+              </object>
             </child>
             <child>
-              <object class="GtkButton" id="plugin_unload_button"/>
+              <object class="GtkButton" id="plugin_unload_button">
+                <property name="label" translatable="yes">Unload</property>
+              </object>
             </child>
             <child>
-              <object class="GtkButton" id="plugin_reload_button"/>
+              <object class="GtkButton" id="plugin_reload_button">
+                <property name="label" translatable="yes">Reload</property>
+              </object>
             </child>
             <child>
-              <object class="GtkButton" id="plugin_close_button"/>
+              <object class="GtkButton" id="plugin_close_button">
+                <property name="label" translatable="yes">Close</property>
+              </object>
             </child>
           </object>
         </child>

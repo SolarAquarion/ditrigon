@@ -276,10 +276,6 @@ ignore_gui_open (void)
 	g_object_ref_sink (ignore_view.window);
 	g_object_unref (builder);
 
-	gtk_button_set_label (GTK_BUTTON (add_button), _("Add..."));
-	gtk_button_set_label (GTK_BUTTON (ignore_view.remove_button), _("Remove"));
-	gtk_button_set_label (GTK_BUTTON (ignore_view.clear_button), _("Clear"));
-	gtk_button_set_label (GTK_BUTTON (close_button), _("Close"));
 	g_signal_connect (ignore_view.list, "selected-rows-changed",
 		G_CALLBACK (ignore_selection_changed_cb), NULL);
 	g_signal_connect (add_button, "clicked", G_CALLBACK (ignore_add_cb), NULL);
@@ -292,7 +288,6 @@ ignore_gui_open (void)
 	g_signal_connect (ignore_view.window, "close-request",
 		G_CALLBACK (ignore_close_request_cb), NULL);
 
-	gtk_window_set_title (GTK_WINDOW (ignore_view.window), _("Ignore List"));
 	if (main_window)
 		gtk_window_set_transient_for (GTK_WINDOW (ignore_view.window), GTK_WINDOW (main_window));
 

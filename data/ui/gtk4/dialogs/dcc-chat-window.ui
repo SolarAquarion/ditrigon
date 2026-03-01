@@ -5,6 +5,7 @@
   <object class="GtkWindow" id="dcc_chat_window">
     <property name="default-width">640</property>
     <property name="default-height">320</property>
+    <property name="title" translatable="yes">DCC Chat List</property>
     <property name="child">
       <object class="GtkBox" id="dcc_chat_root">
         <property name="orientation">vertical</property>
@@ -29,9 +30,21 @@
             <property name="orientation">horizontal</property>
             <property name="spacing">6</property>
             <property name="halign">end</property>
-            <child><object class="GtkButton" id="dcc_chat_accept_button"/></child>
-            <child><object class="GtkButton" id="dcc_chat_abort_button"/></child>
-            <child><object class="GtkButton" id="dcc_chat_close_button"/></child>
+            <child>
+              <object class="GtkButton" id="dcc_chat_accept_button">
+                <property name="label" translatable="yes">Accept</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkButton" id="dcc_chat_abort_button">
+                <property name="label" translatable="yes">Abort</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkButton" id="dcc_chat_close_button">
+                <property name="label" translatable="yes">Close</property>
+              </object>
+            </child>
           </object>
         </child>
       </object>

@@ -709,12 +709,6 @@ fe_dcc_open_recv_win (int passive)
 	g_object_ref_sink (dcc_file_window.window);
 	g_object_unref (builder);
 
-	gtk_button_set_label (GTK_BUTTON (dcc_file_window.accept_button), _("Accept"));
-	gtk_button_set_label (GTK_BUTTON (dcc_file_window.resume_button), _("Resume"));
-	gtk_button_set_label (GTK_BUTTON (dcc_file_window.abort_button), _("Abort"));
-	gtk_button_set_label (GTK_BUTTON (dcc_file_window.clear_button), _("Clear"));
-	gtk_button_set_label (GTK_BUTTON (open_button), _("Open Folder..."));
-	gtk_button_set_label (GTK_BUTTON (close_button), _("Close"));
 	g_signal_connect (dcc_file_window.list, "selected-rows-changed",
 		G_CALLBACK (dcc_file_selected_changed_cb), NULL);
 	g_signal_connect (dcc_file_window.list, "row-activated",
@@ -733,7 +727,6 @@ fe_dcc_open_recv_win (int passive)
 	g_signal_connect (dcc_file_window.window, "close-request",
 		G_CALLBACK (dcc_file_close_request_cb), NULL);
 
-	gtk_window_set_title (GTK_WINDOW (dcc_file_window.window), _("Uploads and Downloads"));
 	if (main_window)
 		gtk_window_set_transient_for (GTK_WINDOW (dcc_file_window.window), GTK_WINDOW (main_window));
 
@@ -772,9 +765,6 @@ fe_dcc_open_chat_win (int passive)
 	g_object_ref_sink (dcc_chat_window.window);
 	g_object_unref (builder);
 
-	gtk_button_set_label (GTK_BUTTON (dcc_chat_window.accept_button), _("Accept"));
-	gtk_button_set_label (GTK_BUTTON (dcc_chat_window.abort_button), _("Abort"));
-	gtk_button_set_label (GTK_BUTTON (close_button), _("Close"));
 	g_signal_connect (dcc_chat_window.list, "selected-rows-changed",
 		G_CALLBACK (dcc_chat_selected_changed_cb), NULL);
 	g_signal_connect (dcc_chat_window.list, "row-activated",
@@ -788,7 +778,6 @@ fe_dcc_open_chat_win (int passive)
 	g_signal_connect (dcc_chat_window.window, "close-request",
 		G_CALLBACK (dcc_chat_close_request_cb), NULL);
 
-	gtk_window_set_title (GTK_WINDOW (dcc_chat_window.window), _("DCC Chat List"));
 	if (main_window)
 		gtk_window_set_transient_for (GTK_WINDOW (dcc_chat_window.window), GTK_WINDOW (main_window));
 

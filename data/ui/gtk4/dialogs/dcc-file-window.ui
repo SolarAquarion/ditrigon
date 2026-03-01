@@ -5,6 +5,7 @@
   <object class="GtkWindow" id="dcc_file_window">
     <property name="default-width">760</property>
     <property name="default-height">420</property>
+    <property name="title" translatable="yes">Uploads and Downloads</property>
     <property name="child">
       <object class="GtkBox" id="dcc_file_root">
         <property name="orientation">vertical</property>
@@ -29,12 +30,36 @@
             <property name="orientation">horizontal</property>
             <property name="spacing">6</property>
             <property name="halign">end</property>
-            <child><object class="GtkButton" id="dcc_file_accept_button"/></child>
-            <child><object class="GtkButton" id="dcc_file_resume_button"/></child>
-            <child><object class="GtkButton" id="dcc_file_abort_button"/></child>
-            <child><object class="GtkButton" id="dcc_file_clear_button"/></child>
-            <child><object class="GtkButton" id="dcc_file_open_button"/></child>
-            <child><object class="GtkButton" id="dcc_file_close_button"/></child>
+            <child>
+              <object class="GtkButton" id="dcc_file_accept_button">
+                <property name="label" translatable="yes">Accept</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkButton" id="dcc_file_resume_button">
+                <property name="label" translatable="yes">Resume</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkButton" id="dcc_file_abort_button">
+                <property name="label" translatable="yes">Abort</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkButton" id="dcc_file_clear_button">
+                <property name="label" translatable="yes">Clear</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkButton" id="dcc_file_open_button">
+                <property name="label" translatable="yes">Open Folder...</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkButton" id="dcc_file_close_button">
+                <property name="label" translatable="yes">Close</property>
+              </object>
+            </child>
           </object>
         </child>
       </object>

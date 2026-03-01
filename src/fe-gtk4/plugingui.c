@@ -280,10 +280,6 @@ plugingui_open (void)
 	g_object_ref_sink (plugin_window);
 	g_object_unref (builder);
 
-	gtk_button_set_label (GTK_BUTTON (load_button), _("Load..."));
-	gtk_button_set_label (GTK_BUTTON (unload_button), _("Unload"));
-	gtk_button_set_label (GTK_BUTTON (reload_button), _("Reload"));
-	gtk_button_set_label (GTK_BUTTON (close_button), _("Close"));
 	g_signal_connect (load_button, "clicked", G_CALLBACK (plugingui_loadbutton_cb), NULL);
 	g_signal_connect (unload_button, "clicked", G_CALLBACK (plugingui_unload), NULL);
 	g_signal_connect (reload_button, "clicked", G_CALLBACK (plugingui_reloadbutton_cb), NULL);
@@ -292,7 +288,6 @@ plugingui_open (void)
 	g_signal_connect (plugin_window, "close-request",
 		G_CALLBACK (plugingui_close_request_cb), NULL);
 
-	gtk_window_set_title (GTK_WINDOW (plugin_window), _("Plugins and Scripts"));
 	if (main_window)
 		gtk_window_set_transient_for (GTK_WINDOW (plugin_window), GTK_WINDOW (main_window));
 

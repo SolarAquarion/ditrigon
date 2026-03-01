@@ -115,8 +115,6 @@ joind_cancel_cb (GtkButton *button, gpointer userdata)
 void
 joind_open (server *serv)
 {
-	GtkWidget *title;
-	GtkWidget *desc;
 	GtkWidget *ok_button;
 	GtkWidget *cancel_button;
 	GtkBuilder *builder;
@@ -144,8 +142,6 @@ joind_open (server *serv)
 
 	builder = fe_gtk4_builder_new_from_resource (JOIND_UI_PATH);
 	join_dialog.window = fe_gtk4_builder_get_widget (builder, "joind_window", GTK_TYPE_WINDOW);
-	title = fe_gtk4_builder_get_widget (builder, "joind_title", GTK_TYPE_LABEL);
-	desc = fe_gtk4_builder_get_widget (builder, "joind_desc", GTK_TYPE_LABEL);
 	join_dialog.radio_nothing = fe_gtk4_builder_get_widget (builder, "joind_radio_nothing", GTK_TYPE_CHECK_BUTTON);
 	join_dialog.radio_join = fe_gtk4_builder_get_widget (builder, "joind_radio_join", GTK_TYPE_CHECK_BUTTON);
 	join_dialog.entry = fe_gtk4_builder_get_widget (builder, "joind_entry", GTK_TYPE_ENTRY);
@@ -155,19 +151,6 @@ joind_open (server *serv)
 	ok_button = fe_gtk4_builder_get_widget (builder, "joind_ok_button", GTK_TYPE_BUTTON);
 	g_object_ref_sink (join_dialog.window);
 	g_object_unref (builder);
-
-	title_text = g_strdup_printf ("<b>%s</b>", _("Connection successful."));
-	gtk_label_set_markup (GTK_LABEL (title), title_text);
-	g_free (title_text);
-	gtk_label_set_text (GTK_LABEL (desc),
-		_("No auto-join channel is configured for this network. What would you like to do next?"));
-	gtk_check_button_set_label (GTK_CHECK_BUTTON (join_dialog.radio_nothing), _("Nothing, I'll join later."));
-	gtk_check_button_set_label (GTK_CHECK_BUTTON (join_dialog.radio_join), _("Join this channel:"));
-	gtk_check_button_set_label (GTK_CHECK_BUTTON (join_dialog.radio_list), _("Open the channel list."));
-	gtk_check_button_set_label (GTK_CHECK_BUTTON (join_dialog.check),
-		_("Always show this dialog after connecting."));
-	gtk_button_set_label (GTK_BUTTON (cancel_button), _("Cancel"));
-	gtk_button_set_label (GTK_BUTTON (ok_button), _("OK"));
 
 	join_dialog.serv = serv;
 	gtk_window_set_default_size (GTK_WINDOW (join_dialog.window), 560, 280);

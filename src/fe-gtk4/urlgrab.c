@@ -223,7 +223,6 @@ url_opengui (void)
 	GtkWidget *save_button;
 	GtkWidget *clear_button;
 	GtkWidget *close_button;
-	GtkWidget *hint;
 	GtkBuilder *builder;
 
 	if (urlgrab_view.window)
@@ -234,7 +233,6 @@ url_opengui (void)
 
 	builder = fe_gtk4_builder_new_from_resource (URLGRAB_UI_PATH);
 	urlgrab_view.window = fe_gtk4_builder_get_widget (builder, "urlgrab_window", GTK_TYPE_WINDOW);
-	hint = fe_gtk4_builder_get_widget (builder, "urlgrab_hint", GTK_TYPE_LABEL);
 	urlgrab_view.list = fe_gtk4_builder_get_widget (builder, "urlgrab_list", GTK_TYPE_LIST_BOX);
 	open_button = fe_gtk4_builder_get_widget (builder, "urlgrab_open_button", GTK_TYPE_BUTTON);
 	copy_button = fe_gtk4_builder_get_widget (builder, "urlgrab_copy_button", GTK_TYPE_BUTTON);
@@ -244,12 +242,6 @@ url_opengui (void)
 	g_object_ref_sink (urlgrab_view.window);
 	g_object_unref (builder);
 
-	gtk_label_set_text (GTK_LABEL (hint), _("Double-click a URL to open it."));
-	gtk_button_set_label (GTK_BUTTON (open_button), _("Open"));
-	gtk_button_set_label (GTK_BUTTON (copy_button), _("Copy"));
-	gtk_button_set_label (GTK_BUTTON (save_button), _("Save As..."));
-	gtk_button_set_label (GTK_BUTTON (clear_button), _("Clear"));
-	gtk_button_set_label (GTK_BUTTON (close_button), _("Close"));
 	g_signal_connect (urlgrab_view.list, "row-activated",
 		G_CALLBACK (urlgrab_row_activated_cb), NULL);
 	g_signal_connect (open_button, "clicked", G_CALLBACK (urlgrab_open_selected_cb), NULL);
@@ -261,7 +253,6 @@ url_opengui (void)
 	g_signal_connect (urlgrab_view.window, "close-request",
 		G_CALLBACK (urlgrab_close_request_cb), NULL);
 
-	gtk_window_set_title (GTK_WINDOW (urlgrab_view.window), _("URL Grabber"));
 	if (main_window)
 		gtk_window_set_transient_for (GTK_WINDOW (urlgrab_view.window), GTK_WINDOW (main_window));
 

@@ -5,6 +5,7 @@
   <object class="GtkWindow" id="urlgrab_window">
     <property name="default-width">640</property>
     <property name="default-height">420</property>
+    <property name="title" translatable="yes">URL Grabber</property>
     <property name="child">
       <object class="GtkBox" id="urlgrab_root">
         <property name="orientation">vertical</property>
@@ -15,6 +16,7 @@
         <property name="margin-bottom">12</property>
         <child>
           <object class="GtkLabel" id="urlgrab_hint">
+            <property name="label" translatable="yes">Double-click a URL to open it.</property>
             <property name="xalign">0</property>
             <style>
               <class name="dim-label"/>
@@ -38,19 +40,29 @@
             <property name="spacing">6</property>
             <property name="halign">end</property>
             <child>
-              <object class="GtkButton" id="urlgrab_open_button"/>
+              <object class="GtkButton" id="urlgrab_open_button">
+                <property name="label" translatable="yes">Open</property>
+              </object>
             </child>
             <child>
-              <object class="GtkButton" id="urlgrab_copy_button"/>
+              <object class="GtkButton" id="urlgrab_copy_button">
+                <property name="label" translatable="yes">Copy</property>
+              </object>
             </child>
             <child>
-              <object class="GtkButton" id="urlgrab_save_button"/>
+              <object class="GtkButton" id="urlgrab_save_button">
+                <property name="label" translatable="yes">Save As...</property>
+              </object>
             </child>
             <child>
-              <object class="GtkButton" id="urlgrab_clear_button"/>
+              <object class="GtkButton" id="urlgrab_clear_button">
+                <property name="label" translatable="yes">Clear</property>
+              </object>
             </child>
             <child>
-              <object class="GtkButton" id="urlgrab_close_button"/>
+              <object class="GtkButton" id="urlgrab_close_button">
+                <property name="label" translatable="yes">Close</property>
+              </object>
             </child>
           </object>
         </child>

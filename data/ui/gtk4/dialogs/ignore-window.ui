@@ -5,6 +5,7 @@
   <object class="GtkWindow" id="ignore_window">
     <property name="default-width">680</property>
     <property name="default-height">420</property>
+    <property name="title" translatable="yes">Ignore List</property>
     <property name="child">
       <object class="GtkBox" id="ignore_root">
         <property name="orientation">vertical</property>
@@ -35,16 +36,24 @@
             <property name="spacing">6</property>
             <property name="halign">end</property>
             <child>
-              <object class="GtkButton" id="ignore_add_button"/>
+              <object class="GtkButton" id="ignore_add_button">
+                <property name="label" translatable="yes">Add...</property>
+              </object>
             </child>
             <child>
-              <object class="GtkButton" id="ignore_remove_button"/>
+              <object class="GtkButton" id="ignore_remove_button">
+                <property name="label" translatable="yes">Remove</property>
+              </object>
             </child>
             <child>
-              <object class="GtkButton" id="ignore_clear_button"/>
+              <object class="GtkButton" id="ignore_clear_button">
+                <property name="label" translatable="yes">Clear</property>
+              </object>
             </child>
             <child>
-              <object class="GtkButton" id="ignore_close_button"/>
+              <object class="GtkButton" id="ignore_close_button">
+                <property name="label" translatable="yes">Close</property>
+              </object>
             </child>
           </object>
         </child>

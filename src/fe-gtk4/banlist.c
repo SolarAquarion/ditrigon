@@ -288,10 +288,6 @@ banlist_opengui (session *sess)
 		g_object_ref_sink (ban_view.window);
 		g_object_unref (builder);
 
-		gtk_button_set_label (GTK_BUTTON (refresh_button), _("Refresh"));
-		gtk_button_set_label (GTK_BUTTON (ban_view.remove_button), _("Remove"));
-		gtk_button_set_label (GTK_BUTTON (ban_view.clear_button), _("Clear"));
-		gtk_button_set_label (GTK_BUTTON (close_button), _("Close"));
 		g_signal_connect (ban_view.list, "selected-rows-changed",
 			G_CALLBACK (ban_selection_changed_cb), NULL);
 		g_signal_connect (refresh_button, "clicked",
