@@ -16,31 +16,104 @@
         <child>
           <object class="AdwPreferencesGroup" id="group_identity">
             <property name="title" translatable="yes">Network Identity</property>
+            <child>
+              <object class="AdwEntryRow" id="edit_row_netname">
+                <property name="title" translatable="yes">Network name</property>
+              </object>
+            </child>
           </object>
         </child>
         <child>
           <object class="AdwPreferencesGroup" id="group_connection">
             <property name="title" translatable="yes">Connection Options</property>
+            <child>
+              <object class="AdwSwitchRow" id="edit_row_connect_selected">
+                <property name="title" translatable="yes">Connect to selected server only</property>
+                <property name="subtitle" translatable="yes">Don't cycle through servers when connection fails</property>
+              </object>
+            </child>
+            <child>
+              <object class="AdwSwitchRow" id="edit_row_auto_connect">
+                <property name="title" translatable="yes">Auto-connect on startup</property>
+              </object>
+            </child>
+            <child>
+              <object class="AdwSwitchRow" id="edit_row_bypass_proxy">
+                <property name="title" translatable="yes">Bypass proxy server</property>
+              </object>
+            </child>
           </object>
         </child>
         <child>
           <object class="AdwPreferencesGroup" id="group_security">
             <property name="title" translatable="yes">Security</property>
+            <child>
+              <object class="AdwSwitchRow" id="edit_row_use_ssl">
+                <property name="title" translatable="yes">Use SSL for all servers</property>
+              </object>
+            </child>
+            <child>
+              <object class="AdwSwitchRow" id="edit_row_allow_invalid">
+                <property name="title" translatable="yes">Accept invalid SSL certificates</property>
+                <property name="subtitle" translatable="yes">Only enable if you trust the server</property>
+              </object>
+            </child>
           </object>
         </child>
         <child>
           <object class="AdwPreferencesGroup" id="group_auth">
             <property name="title" translatable="yes">Authentication</property>
+            <child>
+              <object class="AdwComboRow" id="edit_row_login">
+                <property name="title" translatable="yes">Login method</property>
+                <property name="subtitle" translatable="yes">How you identify to the server</property>
+              </object>
+            </child>
+            <child>
+              <object class="AdwPasswordEntryRow" id="edit_row_pass">
+                <property name="title" translatable="yes">Password</property>
+              </object>
+            </child>
           </object>
         </child>
         <child>
           <object class="AdwPreferencesGroup" id="group_user_info">
             <property name="title" translatable="yes">User Information</property>
+            <child>
+              <object class="AdwSwitchRow" id="edit_row_use_global">
+                <property name="title" translatable="yes">Use global user information</property>
+              </object>
+            </child>
+            <child>
+              <object class="AdwEntryRow" id="edit_row_nick">
+                <property name="title" translatable="yes">Nick name</property>
+              </object>
+            </child>
+            <child>
+              <object class="AdwEntryRow" id="edit_row_nick2">
+                <property name="title" translatable="yes">Second choice</property>
+              </object>
+            </child>
+            <child>
+              <object class="AdwEntryRow" id="edit_row_real">
+                <property name="title" translatable="yes">Real name</property>
+              </object>
+            </child>
+            <child>
+              <object class="AdwEntryRow" id="edit_row_user">
+                <property name="title" translatable="yes">User name</property>
+              </object>
+            </child>
           </object>
         </child>
         <child>
           <object class="AdwPreferencesGroup" id="group_advanced">
             <property name="title" translatable="yes">Advanced</property>
+            <child>
+              <object class="AdwEntryRow" id="edit_row_charset">
+                <property name="title" translatable="yes">Character encoding</property>
+              </object>
+            </child>
           </object>
         </child>
       </object>
