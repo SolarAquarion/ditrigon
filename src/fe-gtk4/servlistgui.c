@@ -1804,7 +1804,6 @@ static GtkWidget *
 servlist_open_edit (GtkWidget *parent, ircnet *net)
 {
 	GtkWidget *window;
-	AdwPreferencesGroup *group;
 	GtkWidget *list;
 	GtkWidget *add_button, *remove_button, *edit_button;
 	GtkBuilder *builder;
@@ -1816,106 +1815,58 @@ servlist_open_edit (GtkWidget *parent, ircnet *net)
 	builder = fe_gtk4_builder_new_from_resource (SERVLIST_EDIT_UI_PATH);
 	window = fe_gtk4_builder_get_widget (builder, "servlist_edit_window", ADW_TYPE_PREFERENCES_DIALOG);
 
-	/* Get the preference groups */
-	group = ADW_PREFERENCES_GROUP (fe_gtk4_builder_get_widget (builder, "group_identity", ADW_TYPE_PREFERENCES_GROUP));
+	edit_row_netname = ADW_ENTRY_ROW (fe_gtk4_builder_get_widget (builder, "edit_row_netname", ADW_TYPE_ENTRY_ROW));
+	edit_row_connect_selected = ADW_SWITCH_ROW (fe_gtk4_builder_get_widget (builder, "edit_row_connect_selected", ADW_TYPE_SWITCH_ROW));
+	edit_row_auto_connect = ADW_SWITCH_ROW (fe_gtk4_builder_get_widget (builder, "edit_row_auto_connect", ADW_TYPE_SWITCH_ROW));
+	edit_row_bypass_proxy = ADW_SWITCH_ROW (fe_gtk4_builder_get_widget (builder, "edit_row_bypass_proxy", ADW_TYPE_SWITCH_ROW));
+	edit_row_use_ssl = ADW_SWITCH_ROW (fe_gtk4_builder_get_widget (builder, "edit_row_use_ssl", ADW_TYPE_SWITCH_ROW));
+	edit_row_allow_invalid = ADW_SWITCH_ROW (fe_gtk4_builder_get_widget (builder, "edit_row_allow_invalid", ADW_TYPE_SWITCH_ROW));
+	edit_row_login = ADW_COMBO_ROW (fe_gtk4_builder_get_widget (builder, "edit_row_login", ADW_TYPE_COMBO_ROW));
+	edit_row_pass = ADW_PASSWORD_ENTRY_ROW (fe_gtk4_builder_get_widget (builder, "edit_row_pass", ADW_TYPE_PASSWORD_ENTRY_ROW));
+	edit_row_use_global = ADW_SWITCH_ROW (fe_gtk4_builder_get_widget (builder, "edit_row_use_global", ADW_TYPE_SWITCH_ROW));
+	edit_row_nick = ADW_ENTRY_ROW (fe_gtk4_builder_get_widget (builder, "edit_row_nick", ADW_TYPE_ENTRY_ROW));
+	edit_row_nick2 = ADW_ENTRY_ROW (fe_gtk4_builder_get_widget (builder, "edit_row_nick2", ADW_TYPE_ENTRY_ROW));
+	edit_row_real = ADW_ENTRY_ROW (fe_gtk4_builder_get_widget (builder, "edit_row_real", ADW_TYPE_ENTRY_ROW));
+	edit_row_user = ADW_ENTRY_ROW (fe_gtk4_builder_get_widget (builder, "edit_row_user", ADW_TYPE_ENTRY_ROW));
+	edit_row_charset = ADW_ENTRY_ROW (fe_gtk4_builder_get_widget (builder, "edit_row_charset", ADW_TYPE_ENTRY_ROW));
 
-	/* Network Identity Group */
-	edit_row_netname = ADW_ENTRY_ROW (adw_entry_row_new ());
-	adw_preferences_row_set_title (ADW_PREFERENCES_ROW (edit_row_netname), _("Network name"));
+	/* Network Identity */
 	gtk_editable_set_text (GTK_EDITABLE (edit_row_netname), net->name ? net->name : "");
-	adw_preferences_group_add (group, GTK_WIDGET (edit_row_netname));
-
-	/* Connection Options Group */
-	group = ADW_PREFERENCES_GROUP (fe_gtk4_builder_get_widget (builder, "group_connection", ADW_TYPE_PREFERENCES_GROUP));
-
-	edit_row_connect_selected = ADW_SWITCH_ROW (adw_switch_row_new ());
-	adw_preferences_row_set_title (ADW_PREFERENCES_ROW (edit_row_connect_selected), _("Connect to selected server only"));
-	adw_action_row_set_subtitle (ADW_ACTION_ROW (edit_row_connect_selected), _("Don't cycle through servers when connection fails"));
 	adw_switch_row_set_active (edit_row_connect_selected, !(net->flags & FLAG_CYCLE));
 	g_signal_connect (edit_row_connect_selected, "notify::active", G_CALLBACK (servlist_edit_switch_toggled_cb), GINT_TO_POINTER (0));
-	adw_preferences_group_add (group, GTK_WIDGET (edit_row_connect_selected));
-
-	edit_row_auto_connect = ADW_SWITCH_ROW (adw_switch_row_new ());
-	adw_preferences_row_set_title (ADW_PREFERENCES_ROW (edit_row_auto_connect), _("Auto-connect on startup"));
 	adw_switch_row_set_active (edit_row_auto_connect, net->flags & FLAG_AUTO_CONNECT);
 	g_signal_connect (edit_row_auto_connect, "notify::active", G_CALLBACK (servlist_edit_switch_toggled_cb), GINT_TO_POINTER (3));
-	adw_preferences_group_add (group, GTK_WIDGET (edit_row_auto_connect));
-
-	edit_row_bypass_proxy = ADW_SWITCH_ROW (adw_switch_row_new ());
-	adw_preferences_row_set_title (ADW_PREFERENCES_ROW (edit_row_bypass_proxy), _("Bypass proxy server"));
 	adw_switch_row_set_active (edit_row_bypass_proxy, !(net->flags & FLAG_USE_PROXY));
 	g_signal_connect (edit_row_bypass_proxy, "notify::active", G_CALLBACK (servlist_edit_switch_toggled_cb), GINT_TO_POINTER (4));
-	adw_preferences_group_add (group, GTK_WIDGET (edit_row_bypass_proxy));
 
-	/* Security Group */
-	group = ADW_PREFERENCES_GROUP (fe_gtk4_builder_get_widget (builder, "group_security", ADW_TYPE_PREFERENCES_GROUP));
-
-	edit_row_use_ssl = ADW_SWITCH_ROW (adw_switch_row_new ());
-	adw_preferences_row_set_title (ADW_PREFERENCES_ROW (edit_row_use_ssl), _("Use SSL for all servers"));
+	/* Security */
 	adw_switch_row_set_active (edit_row_use_ssl, net->flags & FLAG_USE_SSL);
 	g_signal_connect (edit_row_use_ssl, "notify::active", G_CALLBACK (servlist_edit_switch_toggled_cb), GINT_TO_POINTER (2));
 #ifndef USE_OPENSSL
 	gtk_widget_set_sensitive (GTK_WIDGET (edit_row_use_ssl), FALSE);
 #endif
-	adw_preferences_group_add (group, GTK_WIDGET (edit_row_use_ssl));
-
-	edit_row_allow_invalid = ADW_SWITCH_ROW (adw_switch_row_new ());
-	adw_preferences_row_set_title (ADW_PREFERENCES_ROW (edit_row_allow_invalid), _("Accept invalid SSL certificates"));
-	adw_action_row_set_subtitle (ADW_ACTION_ROW (edit_row_allow_invalid), _("Only enable if you trust the server"));
 	adw_switch_row_set_active (edit_row_allow_invalid, net->flags & FLAG_ALLOW_INVALID);
 	g_signal_connect (edit_row_allow_invalid, "notify::active", G_CALLBACK (servlist_edit_switch_toggled_cb), GINT_TO_POINTER (5));
 #ifndef USE_OPENSSL
 	gtk_widget_set_sensitive (GTK_WIDGET (edit_row_allow_invalid), FALSE);
 #endif
-	adw_preferences_group_add (group, GTK_WIDGET (edit_row_allow_invalid));
 
-	/* Authentication Group */
-	group = ADW_PREFERENCES_GROUP (fe_gtk4_builder_get_widget (builder, "group_auth", ADW_TYPE_PREFERENCES_GROUP));
-
+	/* Authentication */
 	string_list = gtk_string_list_new (login_types);
-	edit_row_login = ADW_COMBO_ROW (adw_combo_row_new ());
-	adw_preferences_row_set_title (ADW_PREFERENCES_ROW (edit_row_login), _("Login method"));
-	adw_action_row_set_subtitle (ADW_ACTION_ROW (edit_row_login), _("How you identify to the server"));
 	adw_combo_row_set_model (edit_row_login, G_LIST_MODEL (string_list));
 	adw_combo_row_set_selected (edit_row_login, servlist_get_login_desc_index (net->logintype));
 	g_signal_connect (edit_row_login, "notify::selected", G_CALLBACK (servlist_edit_login_selected_cb), NULL);
-	adw_preferences_group_add (group, GTK_WIDGET (edit_row_login));
-
-	edit_row_pass = ADW_PASSWORD_ENTRY_ROW (adw_password_entry_row_new ());
-	adw_preferences_row_set_title (ADW_PREFERENCES_ROW (edit_row_pass), _("Password"));
 	gtk_editable_set_text (GTK_EDITABLE (edit_row_pass), net->pass ? net->pass : "");
 	if (net->logintype == LOGIN_SASLEXTERNAL)
 		gtk_widget_set_sensitive (GTK_WIDGET (edit_row_pass), FALSE);
-	adw_preferences_group_add (group, GTK_WIDGET (edit_row_pass));
 
-	/* User Information Group */
-	group = ADW_PREFERENCES_GROUP (fe_gtk4_builder_get_widget (builder, "group_user_info", ADW_TYPE_PREFERENCES_GROUP));
-
-	edit_row_use_global = ADW_SWITCH_ROW (adw_switch_row_new ());
-	adw_preferences_row_set_title (ADW_PREFERENCES_ROW (edit_row_use_global), _("Use global user information"));
+	/* User Information */
 	adw_switch_row_set_active (edit_row_use_global, net->flags & FLAG_USE_GLOBAL);
 	g_signal_connect (edit_row_use_global, "notify::active", G_CALLBACK (servlist_edit_global_user_toggled_cb), NULL);
-	adw_preferences_group_add (group, GTK_WIDGET (edit_row_use_global));
-
-	edit_row_nick = ADW_ENTRY_ROW (adw_entry_row_new ());
-	adw_preferences_row_set_title (ADW_PREFERENCES_ROW (edit_row_nick), _("Nick name"));
 	gtk_editable_set_text (GTK_EDITABLE (edit_row_nick), net->nick ? net->nick : "");
-	adw_preferences_group_add (group, GTK_WIDGET (edit_row_nick));
-
-	edit_row_nick2 = ADW_ENTRY_ROW (adw_entry_row_new ());
-	adw_preferences_row_set_title (ADW_PREFERENCES_ROW (edit_row_nick2), _("Second choice"));
 	gtk_editable_set_text (GTK_EDITABLE (edit_row_nick2), net->nick2 ? net->nick2 : "");
-	adw_preferences_group_add (group, GTK_WIDGET (edit_row_nick2));
-
-	edit_row_real = ADW_ENTRY_ROW (adw_entry_row_new ());
-	adw_preferences_row_set_title (ADW_PREFERENCES_ROW (edit_row_real), _("Real name"));
 	gtk_editable_set_text (GTK_EDITABLE (edit_row_real), net->real ? net->real : "");
-	adw_preferences_group_add (group, GTK_WIDGET (edit_row_real));
-
-	edit_row_user = ADW_ENTRY_ROW (adw_entry_row_new ());
-	adw_preferences_row_set_title (ADW_PREFERENCES_ROW (edit_row_user), _("User name"));
 	gtk_editable_set_text (GTK_EDITABLE (edit_row_user), net->user ? net->user : "");
-	adw_preferences_group_add (group, GTK_WIDGET (edit_row_user));
 
 	/* Set initial sensitivity based on use_global flag */
 	if (net->flags & FLAG_USE_GLOBAL)
@@ -1925,12 +1876,15 @@ servlist_open_edit (GtkWidget *parent, ircnet *net)
 		gtk_widget_set_sensitive (GTK_WIDGET (edit_row_user), FALSE);
 		gtk_widget_set_sensitive (GTK_WIDGET (edit_row_real), FALSE);
 	}
+	else
+	{
+		gtk_widget_set_sensitive (GTK_WIDGET (edit_row_nick), TRUE);
+		gtk_widget_set_sensitive (GTK_WIDGET (edit_row_nick2), TRUE);
+		gtk_widget_set_sensitive (GTK_WIDGET (edit_row_user), TRUE);
+		gtk_widget_set_sensitive (GTK_WIDGET (edit_row_real), TRUE);
+	}
 
-	/* Advanced Group */
-	group = ADW_PREFERENCES_GROUP (fe_gtk4_builder_get_widget (builder, "group_advanced", ADW_TYPE_PREFERENCES_GROUP));
-
-	edit_row_charset = ADW_ENTRY_ROW (adw_entry_row_new ());
-	adw_preferences_row_set_title (ADW_PREFERENCES_ROW (edit_row_charset), _("Character encoding"));
+	/* Advanced */
 	gtk_editable_set_text (GTK_EDITABLE (edit_row_charset), net->encoding ? net->encoding : IRC_DEFAULT_CHARSET);
 	g_signal_connect (edit_row_charset, "changed", G_CALLBACK (servlist_edit_charset_entry_changed_cb), NULL);
 
@@ -1949,7 +1903,6 @@ servlist_open_edit (GtkWidget *parent, ircnet *net)
 	gtk_drop_down_set_selected (edit_charset_dropdown, selected_index);
 	g_signal_connect (edit_charset_dropdown, "notify::selected", G_CALLBACK (servlist_edit_charset_dropdown_selected_cb), NULL);
 	adw_entry_row_add_suffix (edit_row_charset, GTK_WIDGET (edit_charset_dropdown));
-	adw_preferences_group_add (group, GTK_WIDGET (edit_row_charset));
 
 	/* Get list widgets and buttons from UI */
 	list = fe_gtk4_builder_get_widget (builder, "servers_list", GTK_TYPE_LIST_BOX);

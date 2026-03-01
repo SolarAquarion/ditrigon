@@ -1,49 +1,59 @@
-<?xml version="1.0" encoding="UTF-8"?>
+<?xml version='1.0' encoding='UTF-8'?>
+<!-- Created with Cambalache 0.96.3 -->
 <interface>
+  <!-- interface-name notify-window.ui -->
   <requires lib="gtk" version="4.0"/>
-
   <object class="GtkWindow" id="notify_window">
-    <property name="default-width">620</property>
-    <property name="default-height">420</property>
     <property name="child">
       <object class="GtkBox" id="notify_root">
+        <property name="margin-bottom">12</property>
+        <property name="margin-end">12</property>
+        <property name="margin-start">12</property>
+        <property name="margin-top">12</property>
         <property name="orientation">vertical</property>
         <property name="spacing">8</property>
-        <property name="margin-start">12</property>
-        <property name="margin-end">12</property>
-        <property name="margin-top">12</property>
-        <property name="margin-bottom">12</property>
         <child>
           <object class="GtkScrolledWindow" id="notify_scroll">
-            <property name="hexpand">True</property>
-            <property name="vexpand">True</property>
             <property name="child">
               <object class="GtkListBox" id="notify_list">
                 <property name="selection-mode">single</property>
               </object>
             </property>
+            <property name="hexpand">True</property>
+            <property name="vexpand">True</property>
           </object>
         </child>
         <child>
           <object class="GtkBox" id="notify_buttons">
+            <property name="halign">end</property>
             <property name="orientation">horizontal</property>
             <property name="spacing">6</property>
-            <property name="halign">end</property>
             <child>
-              <object class="GtkButton" id="notify_add_button"/>
+              <object class="GtkButton" id="notify_add_button">
+                <property name="label" translatable="yes">Add...</property>
+              </object>
             </child>
             <child>
-              <object class="GtkButton" id="notify_open_button"/>
+              <object class="GtkButton" id="notify_open_button">
+                <property name="label" translatable="yes">Open Dialog</property>
+              </object>
             </child>
             <child>
-              <object class="GtkButton" id="notify_remove_button"/>
+              <object class="GtkButton" id="notify_remove_button">
+                <property name="label" translatable="yes">Remove</property>
+              </object>
             </child>
             <child>
-              <object class="GtkButton" id="notify_close_button"/>
+              <object class="GtkButton" id="notify_close_button">
+                <property name="label" translatable="yes">Close</property>
+              </object>
             </child>
           </object>
         </child>
       </object>
     </property>
+    <property name="default-height">420</property>
+    <property name="default-width">620</property>
+    <property name="title" translatable="yes">Friends List</property>
   </object>
 </interface>

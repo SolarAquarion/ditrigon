@@ -1,0 +1,59 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<!-- Created with Cambalache 0.96.3 -->
+<interface>
+  <!-- interface-name userlist-shell.ui -->
+  <requires lib="Adw" version="1.0"/>
+  <requires lib="gtk" version="4.0"/>
+  <requires lib="libadwaita" version="1.0"/>
+  <object class="GtkRevealer" id="userlist_revealer">
+    <property name="child">
+      <object class="GtkBox" id="userlist_panel">
+        <property name="orientation">vertical</property>
+        <property name="spacing">0</property>
+        <child>
+          <object class="GtkLabel" id="userlist_info_label">
+            <property name="margin-bottom">4</property>
+            <property name="margin-end">8</property>
+            <property name="margin-start">8</property>
+            <property name="margin-top">8</property>
+            <property name="use-markup">True</property>
+            <property name="xalign">0.0</property>
+          </object>
+        </child>
+        <child>
+          <object class="GtkSearchEntry" id="userlist_search_entry">
+            <property name="margin-bottom">8</property>
+            <property name="margin-end">8</property>
+            <property name="margin-start">8</property>
+            <property name="margin-top">2</property>
+          </object>
+        </child>
+        <child>
+          <object class="GtkScrolledWindow" id="userlist_scroller">
+            <property name="hexpand">False</property>
+            <property name="hscrollbar-policy">never</property>
+            <property name="vexpand">True</property>
+            <property name="vscrollbar-policy">automatic</property>
+          </object>
+        </child>
+        <child>
+          <object class="AdwStatusPage" id="userlist_empty_page">
+            <property name="hexpand">True</property>
+            <property name="margin-bottom">8</property>
+            <property name="margin-end">8</property>
+            <property name="margin-start">8</property>
+            <property name="vexpand">True</property>
+            <style>
+              <class name="hc-userlist-empty"/>
+            </style>
+          </object>
+        </child>
+      </object>
+    </property>
+    <property name="hexpand">False</property>
+    <property name="transition-duration">250</property>
+    <property name="transition-type">slide-left</property>
+    <property name="vexpand">True</property>
+    <property name="visible">True</property>
+  </object>
+</interface>

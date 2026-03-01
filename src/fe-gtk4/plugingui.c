@@ -73,8 +73,6 @@ plugingui_add_row (hexchat_plugin *pl)
 {
 	GtkWidget *row;
 	GtkWidget *box;
-	GtkWidget *title;
-	GtkWidget *subtitle;
 	char *title_text;
 	char *subtitle_text;
 	const char *name;
@@ -93,20 +91,7 @@ plugingui_add_row (hexchat_plugin *pl)
 	title_text = g_strdup_printf ("%s (%s)", name, version);
 	subtitle_text = g_strdup_printf ("%s - %s", file, desc);
 
-	title = gtk_label_new (title_text);
-	gtk_label_set_xalign (GTK_LABEL (title), 0.0f);
-	subtitle = gtk_label_new (subtitle_text);
-	gtk_label_set_xalign (GTK_LABEL (subtitle), 0.0f);
-	gtk_label_set_wrap (GTK_LABEL (subtitle), TRUE);
-	gtk_widget_add_css_class (subtitle, "dim-label");
-
-	box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 2);
-	gtk_widget_set_margin_start (box, 10);
-	gtk_widget_set_margin_end (box, 10);
-	gtk_widget_set_margin_top (box, 6);
-	gtk_widget_set_margin_bottom (box, 6);
-	gtk_box_append (GTK_BOX (box), title);
-	gtk_box_append (GTK_BOX (box), subtitle);
+	box = fe_gtk4_two_line_row_new (title_text, subtitle_text, NULL, NULL);
 
 	row = gtk_list_box_row_new ();
 	gtk_list_box_row_set_child (GTK_LIST_BOX_ROW (row), box);
@@ -280,10 +265,6 @@ plugingui_open (void)
 	g_object_ref_sink (plugin_window);
 	g_object_unref (builder);
 
-	gtk_button_set_label (GTK_BUTTON (load_button), _("Load..."));
-	gtk_button_set_label (GTK_BUTTON (unload_button), _("Unload"));
-	gtk_button_set_label (GTK_BUTTON (reload_button), _("Reload"));
-	gtk_button_set_label (GTK_BUTTON (close_button), _("Close"));
 	g_signal_connect (load_button, "clicked", G_CALLBACK (plugingui_loadbutton_cb), NULL);
 	g_signal_connect (unload_button, "clicked", G_CALLBACK (plugingui_unload), NULL);
 	g_signal_connect (reload_button, "clicked", G_CALLBACK (plugingui_reloadbutton_cb), NULL);
@@ -292,7 +273,6 @@ plugingui_open (void)
 	g_signal_connect (plugin_window, "close-request",
 		G_CALLBACK (plugingui_close_request_cb), NULL);
 
-	gtk_window_set_title (GTK_WINDOW (plugin_window), _("Plugins and Scripts"));
 	if (main_window)
 		gtk_window_set_transient_for (GTK_WINDOW (plugin_window), GTK_WINDOW (main_window));
 
