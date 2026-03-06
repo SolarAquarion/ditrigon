@@ -1188,6 +1188,9 @@ process_named_msg (session *sess, char *type, char *word[], char *word_eol[],
 		switch (t)
 		{
 
+		case WORDL('T','A','G','M'):
+			return;
+
 		case WORDL('A','C','C','O'):
 			inbound_account (serv, nick, STRIP_COLON(word, word_eol, 3), tags_data);
 			return;
