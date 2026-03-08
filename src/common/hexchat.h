@@ -406,6 +406,8 @@ typedef struct session
 
 	int type;					/* SESS_* */
 
+	GHashTable *typing_users;	/* keys: nick, values: timer tag */
+
 	int lastact_idx;		/* the sess_list_by_lastact[] index of the list we're in.
 							 * For valid values, see defines of LACT_*. */
 

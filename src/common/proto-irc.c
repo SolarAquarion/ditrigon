@@ -1189,6 +1189,7 @@ process_named_msg (session *sess, char *type, char *word[], char *word_eol[],
 		{
 
 		case WORDL('T','A','G','M'):
+			inbound_tagmsg (sess, nick, word[3], tags_data);
 			return;
 
 		case WORDL('A','C','C','O'):
@@ -1546,6 +1547,10 @@ handle_message_tags (server *serv, const char *tags_str,
 		if (serv->have_idmsg && !strcmp (key, "solanum.chat/identified"))
 			tags_data->identified = TRUE;
 
+		/* IRCv3 typing indicators are sent as "+typing=active|paused|done" */
+		if (!strcmp (key, "+typing"))
+			tags_data->typing = g_strdup (value);
+
 		if (serv->have_server_time && !strcmp (key, "time"))
 			handle_message_tag_time (value, tags_data);
 	}
@@ -1651,6 +1656,7 @@ void
 message_tags_data_free (message_tags_data *tags_data)
 {
 	g_clear_pointer (&tags_data->account, g_free);
+	g_clear_pointer (&tags_data->typing, g_free);
 }
 
 void
