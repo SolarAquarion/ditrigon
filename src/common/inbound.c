@@ -1681,6 +1681,8 @@ inbound_toggle_caps (server *serv, const char *extensions_str, gboolean enable)
 			serv->have_awaynotify = enable;
 		else if (!strcmp (extension, "account-tag"))
 			serv->have_account_tag = enable;
+		else if (!strcmp (extension, "message-tags"))
+			serv->have_message_tags = enable;
 		else if (!strcmp (extension, "sasl"))
 		{
 			serv->have_sasl = enable;
