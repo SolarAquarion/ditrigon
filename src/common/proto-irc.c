@@ -1363,6 +1363,11 @@ process_named_msg (session *sess, char *type, char *word[], char *word_eol[],
 			EMIT_SIGNAL_TIMESTAMP (XP_TE_WALLOPS, sess, nick, text, NULL, NULL, 0,
 										  tags_data->timestamp);
 			return;
+
+		case WORDL('B','A','T','C'):
+			/* we can safely ignore BATCH start/end commands since their
+			contents get sent as normal messages */
+			return;
 		}
 	}
 
@@ -1403,6 +1408,7 @@ process_named_msg (session *sess, char *type, char *word[], char *word_eol[],
 											tags_data);
 				}
 
+			case WORDL('A','C','K','\0'):
 				return;
 		}
 	}
@@ -1676,6 +1682,7 @@ message_tags_data_free (message_tags_data *tags_data)
 {
 	g_clear_pointer (&tags_data->account, g_free);
 	g_clear_pointer (&tags_data->typing, g_free);
+	g_clear_pointer (&tags_data->label, g_free);
 }
 
 void
