@@ -475,7 +475,7 @@ create_mask (session * sess, char *mask, char *mode, char *typestr, int deop)
 				return NULL;				  /* can't happen? */
 
 			*lastdot = 0;
-			strcpy (domain, fullhost);
+			safe_strcpy (domain, fullhost, sizeof (domain));
 			*lastdot = '.';
 
 			switch (type)
@@ -723,7 +723,7 @@ cmd_country (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 			return TRUE;
 		}
 
-		sprintf (tbuf, "%s = %s\n", code, country (code));
+		g_snprintf (tbuf, sizeof (tbuf), "%s = %s\n", code, country (code));
 		PrintText (sess, tbuf);
 		return TRUE;
 	}
@@ -891,7 +891,7 @@ cmd_debug (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 	while (list)
 	{
 		s = (struct session *) list->data;
-		sprintf (tbuf, "%p %1x %-10.10s %-10.10s %-10.10s %p\n",
+		g_snprintf (tbuf, sizeof (tbuf), "%p %1x %-10.10s %-10.10s %-10.10s %p\n",
 					s, s->type, s->channel, s->waitchannel,
 					s->willjoinchannel, s->server);
 		PrintText (sess, tbuf);
@@ -903,13 +903,13 @@ cmd_debug (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 	while (list)
 	{
 		v = (struct server *) list->data;
-		sprintf (tbuf, "%p %-5d %s\n",
+		g_snprintf (tbuf, sizeof (tbuf), "%p %-5d %s\n",
 					v, v->sok, v->servername);
 		PrintText (sess, tbuf);
 		list = list->next;
 	}
 
-	sprintf (tbuf,
+	g_snprintf (tbuf, sizeof (tbuf),
 				"\nfront_session: %p\n"
 				"current_tab: %p\n\n",
 				sess->server->front_session, current_tab);
@@ -1844,10 +1844,12 @@ cmd_exec (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 {
 	int tochannel = FALSE;
 	char *cmd = word_eol[2];
-	int fds[2], pid = 0;
+	int pid = 0;
 	struct nbexec *s;
 	int shell = TRUE;
-	int fd;
+	GError *error = NULL;
+	char **argv;
+	int argc;
 
 	if (*cmd)
 	{
@@ -1882,102 +1884,53 @@ cmd_exec (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 			}
 		}
 
-#ifdef __EMX__						  /* if os/2 */
-		if (pipe (fds) < 0)
-		{
-			PrintText (sess, "Pipe create error\n");
-			return FALSE;
-		}
-		setmode (fds[0], O_BINARY);
-		setmode (fds[1], O_BINARY);
-#else
-		if (socketpair (PF_UNIX, SOCK_STREAM, 0, fds) == -1)
-		{
-			PrintText (sess, "socketpair(2) failed\n");
-			return FALSE;
-		}
-#endif
 		s = g_new0 (struct nbexec, 1);
-		s->myfd = fds[0];
 		s->tochannel = tochannel;
 		s->sess = sess;
 
-		pid = fork ();
-		if (pid == 0)
+		if (shell)
 		{
-			/* This is the child's context */
-			/* Close parent's end of pipe */
-			close (s->myfd);
-			/* Copy the child end of the pipe to stdout and stderr */
-			if (dup2 (fds[1], 1) == -1)
-			{
-				g_printerr ("dup2(stdout) failed: %s\n", g_strerror (errno));
-				_exit (127);
-			}
-			if (dup2 (fds[1], 2) == -1)
-			{
-				g_printerr ("dup2(stderr) failed: %s\n", g_strerror (errno));
-				_exit (127);
-			}
-			/* Also copy it to stdin so we can write to it */
-			if (dup2 (fds[1], 0) == -1)
-			{
-				g_printerr ("dup2(stdin) failed: %s\n", g_strerror (errno));
-				_exit (127);
-			}
-			/* Now close all open file descriptors except stdin, stdout and stderr */
-			for (fd = 3; fd < 1024; fd++)
-				close (fd);
-			/* Now we call /bin/sh to run our cmd ; made it more friendly -DC1 */
-			if (shell)
-			{
-				execl ("/bin/sh", "sh", "-c", cmd, NULL);
-				g_printerr ("execl(/bin/sh) failed: %s\n", g_strerror (errno));
-				_exit (127);
-			} else
-			{
-				GError *error = NULL;
-				char **argv;
-				int argc;
-
-				if (!g_shell_parse_argv (cmd, &argc, &argv, &error))
-				{
-					g_printerr ("Failed to parse command: %s\n", error->message);
-					g_error_free (error);
-					_exit (127);
-				}
-				if (argc < 1)
-				{
-					g_strfreev (argv);
-					g_printerr ("No command to execute\n");
-					_exit (127);
-				}
-
-				execvp (argv[0], argv);
-				g_printerr ("execvp(%s) failed: %s\n", argv[0], g_strerror (errno));
-
-				g_strfreev (argv);
-				_exit (127);
-			}
-		}
-		if (pid == -1)
-		{
-			/* Parent context, fork() failed */
-
-			PrintText (sess, "Error in fork(2)\n");
-			close(fds[0]);
-			close(fds[1]);
-			g_free (s);
+			argc = 3;
+			argv = g_new0 (char *, 4);
+			argv[0] = g_strdup ("sh");
+			argv[1] = g_strdup ("-c");
+			argv[2] = g_strdup (cmd);
 		}
 		else
 		{
-			/* Parent path */
-			close(fds[1]);
-			s->childpid = pid;
-			s->iotag = fe_input_add (s->myfd, FIA_READ|FIA_EX, exec_data, s);
-			sess->running_exec = s;
-			return TRUE;
+			if (!g_shell_parse_argv (cmd, &argc, &argv, &error))
+			{
+				PrintText (sess, "Failed to parse command\n");
+				g_error_free (error);
+				g_free (s);
+				return FALSE;
+			}
+			if (argc < 1)
+			{
+				g_strfreev (argv);
+				PrintText (sess, "No command to execute\n");
+				g_free (s);
+				return FALSE;
+			}
 		}
+
+		if (!g_spawn_async_with_pipes (NULL, argv, NULL,
+									   G_SPAWN_DO_NOT_REAP_CHILD | G_SPAWN_SEARCH_PATH,
+									   NULL, NULL, &pid, NULL, &s->myfd, NULL, &error))
+		{
+			PrintText (sess, "Failed to spawn process\n");
+			g_error_free (error);
+			g_strfreev (argv);
+			g_free (s);
+			return FALSE;
+		}
+
+		g_strfreev (argv);
+
+		s->childpid = pid;
+		s->iotag = fe_input_add (s->myfd, FIA_READ|FIA_EX, exec_data, s);
+		sess->running_exec = s;
+		return TRUE;
 	}
 	return FALSE;
 }
@@ -2007,7 +1960,7 @@ cmd_exportconf (struct session *sess, char *tbuf, char *word[], char *word_eol[]
 static int
 cmd_flushq (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 {
-	sprintf (tbuf, "Flushing server send queue, %d bytes.\n", sess->server->sendq_len);
+	g_snprintf (tbuf, sizeof (tbuf), "Flushing server send queue, %d bytes.\n", sess->server->sendq_len);
 	PrintText (sess, tbuf);
 	sess->server->flush_queue (sess->server);
 	return TRUE;
@@ -2454,7 +2407,7 @@ cmd_ignore (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 			type |= IG_DCC;
 		else
 		{
-			sprintf (tbuf, _("Unknown arg '%s' ignored."), word[i]);
+			g_snprintf (tbuf, sizeof (tbuf), _("Unknown arg '%s' ignored."), word[i]);
 			PrintText (sess, tbuf);
 		}
 		i++;
@@ -2693,7 +2646,7 @@ cmd_load (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 		return TRUE;
 	}
 
-	sprintf (tbuf, "Unknown file type %s. Maybe you need to install the Perl or Python plugin?\n", word[2]);
+	g_snprintf (tbuf, sizeof (tbuf), "Unknown file type %s. Maybe you need to install the Perl or Python plugin?\n", word[2]);
 	PrintText (sess, tbuf);
 #endif
 
@@ -3412,10 +3365,10 @@ cmd_settab (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 {
 	if (*word_eol[2])
 	{
-		strcpy (tbuf, sess->channel);
+		safe_strcpy (tbuf, sess->channel, CHANLEN);
 		safe_strcpy (sess->channel, word_eol[2], CHANLEN);
 		fe_set_channel (sess);
-		strcpy (sess->channel, tbuf);
+		safe_strcpy (sess->channel, tbuf, CHANLEN);
 	}
 
 	return TRUE;
@@ -4367,7 +4320,7 @@ auto_insert (char *dest, gsize destlen, unsigned char *src, char *word[],
 						if ((dest - orig) + strlen (utf) >= destlen)
 							return 2;
 
-						strcpy (dest, utf);
+						g_strlcpy (dest, utf, destlen - (dest - orig));
 						dest += strlen (dest);
 					}
 				}
@@ -4428,7 +4381,7 @@ auto_insert (char *dest, gsize destlen, unsigned char *src, char *word[],
 				{
 					if ((dest - orig) + strlen (utf) >= destlen)
 						return 2;
-					strcpy (dest, utf);
+					g_strlcpy (dest, utf, destlen - (dest - orig));
 					dest += strlen (dest);
 				}
 
@@ -4547,7 +4500,7 @@ check_special_chars (char *cmd, int do_ascii) /* check for %X */
 	}
 	buf[i] = 0;
 	if (occur)
-		strcpy (cmd, buf);
+		memcpy (cmd, buf, i + 1);
 	g_free (buf);
 }
 

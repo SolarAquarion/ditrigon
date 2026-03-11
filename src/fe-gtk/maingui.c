@@ -1406,7 +1406,7 @@ mg_color_insert (GtkWidget *item, gpointer userdata)
 		key_action_insert (current_sess->gui->input_box, 0, text, 0, 0);
 	} else
 	{
-		sprintf (buf, "\003%02d", num);
+		g_snprintf (buf, sizeof (buf), "\003%02d", num);
 		key_action_insert (current_sess->gui->input_box, 0, buf, 0, 0);
 	}
 }
@@ -1460,7 +1460,7 @@ mg_create_color_menu (GtkWidget *menu, session *sess)
 
 	for (i = 0; i < 8; i++)
 	{
-		sprintf (buf, "<tt><sup>%02d</sup> <span background=\"#%02x%02x%02x\">"
+		g_snprintf (buf, sizeof (buf), "<tt><sup>%02d</sup> <span background=\"#%02x%02x%02x\">"
 					"   </span></tt>",
 				i, colors[i].red >> 8, colors[i].green >> 8, colors[i].blue >> 8);
 		mg_markup_item (subsubmenu, buf, i);
@@ -1470,7 +1470,7 @@ mg_create_color_menu (GtkWidget *menu, session *sess)
 
 	for (i = 8; i < 16; i++)
 	{
-		sprintf (buf, "<tt><sup>%02d</sup> <span background=\"#%02x%02x%02x\">"
+		g_snprintf (buf, sizeof (buf), "<tt><sup>%02d</sup> <span background=\"#%02x%02x%02x\">"
 					"   </span></tt>",
 				i, colors[i].red >> 8, colors[i].green >> 8, colors[i].blue >> 8);
 		mg_markup_item (subsubmenu, buf, i);
@@ -3393,16 +3393,16 @@ fe_clear_channel (session *sess)
 			{
 				/* truncate long channel names */
 				tbuf[0] = '(';
-				strcpy (tbuf + 1, sess->waitchannel);
+				safe_strcpy (tbuf + 1, sess->waitchannel, sizeof (tbuf) - 1);
 				g_utf8_offset_to_pointer(tbuf, prefs.hex_gui_tab_trunc)[0] = 0;
-				strcat (tbuf, "..)");
+				g_strlcat (tbuf, "..)", sizeof (tbuf));
 			} else
 			{
-				sprintf (tbuf, "(%s)", sess->waitchannel);
+				g_snprintf (tbuf, sizeof (tbuf), "(%s)", sess->waitchannel);
 			}
 		}
 		else
-			strcpy (tbuf, _("<none>"));
+			safe_strcpy (tbuf, _("<none>"), sizeof (tbuf));
 		chan_rename (sess->res->tab, tbuf, prefs.hex_gui_tab_trunc);
 	}
 
