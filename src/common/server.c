@@ -1259,6 +1259,9 @@ server_cleanup (server * serv)
 {
 	fe_set_lag (serv, 0);
 
+	if (serv->batch_types)
+		g_hash_table_remove_all (serv->batch_types);
+
 	if (serv->iotag)
 	{
 		fe_input_remove (serv->iotag);
@@ -2165,6 +2168,8 @@ server_new (void)
 
 	/* use server.c and proto-irc.c functions */
 	server_fill_her_up (serv);
+
+	serv->batch_types = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, g_free);
 
 	serv->id = id++;
 	serv->sok = -1;

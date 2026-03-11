@@ -1365,8 +1365,7 @@ process_named_msg (session *sess, char *type, char *word[], char *word_eol[],
 			return;
 
 		case WORDL('B','A','T','C'):
-			/* we can safely ignore BATCH start/end commands since their
-			contents get sent as normal messages */
+			inbound_batch (sess, word[2], word[3], tags_data);
 			return;
 		}
 	}

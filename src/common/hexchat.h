@@ -522,6 +522,7 @@ typedef struct server
 
 	void *network;						/* points to entry in servlist.c or NULL! */
 
+	GHashTable *batch_types;			/* active IRCv3 batches (id -> type) */
 	GSList *outbound_queue;
 	time_t next_send;						/* cptr->since in ircu */
 	time_t prev_now;					/* previous now-time */
