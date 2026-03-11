@@ -35,6 +35,11 @@ GTree *url_btree = NULL;
 static gboolean regex_match (const GRegex *re, const char *word,
 							 int *start, int *end);
 static const GRegex *re_url (void);
+const GRegex *
+url_get_regex (void)
+{
+	return re_url ();
+}
 static const GRegex *re_url_no_scheme (void);
 static const GRegex *re_host (void);
 static const GRegex *re_host6 (void);

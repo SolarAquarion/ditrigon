@@ -4,6 +4,7 @@
 #include "fe-gtk4.h"
 #include "sexy-spell-entry.h"
 #include "../common/url.h"
+#include "../common/url_preview.h"
 #include <adwaita.h>
 
 #ifdef USE_PLUGIN
@@ -1433,6 +1434,22 @@ fe_print_text (struct session *sess, char *text, time_t stamp, gboolean no_activ
 			fe_set_tab_color (target, FE_COLOR_NEW_MSG);
 		else
 			fe_set_tab_color (target, FE_COLOR_NEW_DATA);
+	}
+
+	if (prefs.hex_net_preview_urls && target)
+	{
+		GMatchInfo *gmi;
+		if (g_regex_match (url_get_regex (), text, 0, &gmi))
+		{
+			while (g_match_info_matches (gmi))
+			{
+				char *url = g_match_info_fetch (gmi, 0);
+				url_preview_sniff (target, url, preview_callback, NULL);
+				g_free (url);
+				g_match_info_next (gmi, NULL);
+			}
+		}
+		g_match_info_free (gmi);
 	}
 
 	g_string_free (line, TRUE);

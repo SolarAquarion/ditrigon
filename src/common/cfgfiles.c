@@ -523,6 +523,7 @@ const struct prefs vars[] =
 	{"irc_whois_front", P_OFFINT (hex_irc_whois_front), TYPE_BOOL},
 
 	{"net_auto_reconnect", P_OFFINT (hex_net_auto_reconnect), TYPE_BOOL},
+	{"net_preview_urls", P_OFFINT (hex_net_preview_urls), TYPE_BOOL},
 	{"net_auto_reconnectonfail", P_OFFINT (hex_net_auto_reconnectonfail), TYPE_BOOL},
 	{"net_bind_host", P_OFFSET (hex_net_bind_host), TYPE_STR},
 	{"net_ping_timeout", P_OFFINT (hex_net_ping_timeout), TYPE_INT, hexchat_reinit_timers},
@@ -768,6 +769,7 @@ load_default_config(void)
 	prefs.hex_irc_who_join = 1; /* Can kick with inordinate amount of channels, required for some of our features though, TODO: add cap like away check? */
 	prefs.hex_irc_whois_front = 1;
 	prefs.hex_net_auto_reconnect = 1;
+	prefs.hex_net_preview_urls = 1;
 	prefs.hex_net_throttle = 1;
 	prefs.hex_stamp_log = 1;
 	prefs.hex_stamp_text = 1;

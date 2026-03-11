@@ -98,6 +98,47 @@ static GtkTextTag *tag_bold;
 static GtkTextTag *tag_italic;
 static GtkTextTag *tag_underline;
 static GtkTextTag *tag_link_hover;
+
+static HcSessionState *session_state_lookup (struct session *sess);
+
+typedef struct {
+	struct session *sess;
+	GtkTextChildAnchor *anchor;
+	char *url;
+} ImageLoadContext;
+
+static void
+on_image_loaded (GObject *source_object, GAsyncResult *res, gpointer user_data)
+{
+	ImageLoadContext *ctx = user_data;
+	GFile *file = G_FILE (source_object);
+	GBytes *bytes;
+	GError *error = NULL;
+
+	bytes = g_file_load_bytes_finish (file, res, NULL, &error);
+	if (!error && bytes)
+	{
+		GdkTexture *texture = gdk_texture_new_from_bytes (bytes, &error);
+		if (texture)
+		{
+			GtkWidget *image = gtk_image_new_from_paintable (GDK_PAINTABLE (texture));
+			gtk_image_set_pixel_size (GTK_IMAGE (image), 200);
+
+			HcSessionState *state = session_state_lookup (ctx->sess);
+			if (state && state->widget && state->widget->view)
+			{
+				gtk_text_view_add_child_at_anchor (GTK_TEXT_VIEW (state->widget->view), image, ctx->anchor);
+			}
+			g_object_unref (texture);
+		}
+	}
+
+	if (error) g_error_free (error);
+	if (bytes) g_bytes_unref (bytes);
+	g_object_unref (ctx->anchor);
+	g_free (ctx->url);
+	g_free (ctx);
+}
 static GtkTextTag *tag_nick_column;
 static GtkTextTag *tag_message_hanging;
 static GtkTextTag *tag_font;
@@ -3114,6 +3155,68 @@ fe_gtk4_xtext_append_for_session (session *sess, const char *text)
 		return;
 
 	xtext_append_visible_session (sess, state, text);
+}
+
+void
+fe_gtk4_xtext_append_preview (struct session *sess, URLPreviewData *preview)
+{
+	HcSessionState *state;
+	GtkTextBuffer *buf;
+	GtkTextIter iter;
+
+	if (!sess || !preview)
+		return;
+
+	state = session_state_lookup (sess);
+	if (!state || !state->buffer)
+	{
+		url_preview_data_free (preview);
+		return;
+	}
+	buf = state->buffer;
+
+	gtk_text_buffer_get_end_iter (buf, &iter);
+
+	/* Ensure we start on a new line */
+	if (!gtk_text_iter_starts_line (&iter))
+		gtk_text_buffer_insert (buf, &iter, "\n", 1);
+
+	/* Indent */
+	gtk_text_buffer_insert (buf, &iter, "  \xe2\x86\xb3 ", -1);
+
+	if (preview->title)
+	{
+		gtk_text_buffer_insert_with_tags_by_name (buf, &iter, preview->title, -1, "bold", NULL);
+		gtk_text_buffer_insert (buf, &iter, " ", 1);
+	}
+
+	if (preview->description)
+	{
+		gtk_text_buffer_insert (buf, &iter, "\n    ", -1);
+		gtk_text_buffer_insert (buf, &iter, preview->description, -1);
+	}
+
+	if (preview->image_url)
+	{
+		GtkTextChildAnchor *anchor;
+		ImageLoadContext *ctx;
+		GFile *file;
+
+		gtk_text_buffer_insert (buf, &iter, "\n    ", -1);
+		anchor = gtk_text_buffer_create_child_anchor (buf, &iter);
+
+		ctx = g_new0 (ImageLoadContext, 1);
+		ctx->sess = sess;
+		ctx->anchor = g_object_ref (anchor);
+		ctx->url = g_strdup (preview->image_url);
+
+		file = g_file_new_for_uri (preview->image_url);
+		g_file_load_bytes_async (file, NULL, on_image_loaded, ctx);
+		g_object_unref (file);
+	}
+
+	gtk_text_buffer_insert (buf, &iter, "\n", 1);
+	url_preview_data_free (preview);
 }
 
 void

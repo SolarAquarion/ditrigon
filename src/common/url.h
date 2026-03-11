@@ -20,6 +20,8 @@
 #ifndef HEXCHAT_URL_H
 #define HEXCHAT_URL_H
 
+#include <glib.h>
+
 extern void *url_tree;
 
 #define WORD_URL     1
@@ -37,5 +39,6 @@ void url_save_tree (const char *fname, const char *mode, gboolean fullpath);
 int url_last (int *, int *);
 int url_check_word (const char *word);
 void url_check_line (char *buf);
+const GRegex *url_get_regex (void);
 
 #endif

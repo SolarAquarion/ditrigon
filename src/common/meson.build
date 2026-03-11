@@ -21,6 +21,7 @@ common_sources = [
 	'text.c',
   'tree.c',
   'url.c',
+  'url_preview.c',
   'userlist.c',
   'upload.c',
   'util.c'

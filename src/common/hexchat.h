@@ -177,6 +177,7 @@ struct hexchatprefs
 	unsigned int hex_irc_cap_server_time;
 	unsigned int hex_net_auto_reconnect;
 	unsigned int hex_net_auto_reconnectonfail;
+	unsigned int hex_net_preview_urls;
 	unsigned int hex_net_proxy_auth;
 	unsigned int hex_net_throttle;
 	unsigned int hex_notify_whois_online;

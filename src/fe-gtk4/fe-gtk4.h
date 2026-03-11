@@ -7,6 +7,9 @@
 
 #include <glib/gi18n.h>
 #include <gtk/gtk.h>
+#include "../common/url_preview.h"
+
+void fe_gtk4_xtext_append_preview (struct session *sess, URLPreviewData *preview);
 
 #include "../common/hexchat.h"
 #include "../common/hexchatc.h"
