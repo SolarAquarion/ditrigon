@@ -3791,6 +3791,32 @@ cmd_upload (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 		file = word_eol[3];
 	}
 
+	if (sess->server && sess->server->have_file_upload)
+	{
+		GFile *gfile = g_file_new_for_path (file);
+		GFileInfo *info = g_file_query_info (gfile, G_FILE_ATTRIBUTE_STANDARD_SIZE, 0, NULL, NULL);
+		if (info)
+		{
+			goffset size = g_file_info_get_size (info);
+			char *filename = g_path_get_basename (file);
+			
+			pending_upload *pu = g_new0 (pending_upload, 1);
+			pu->filename = g_strdup (filename);
+			pu->filepath = g_strdup (file);
+			pu->target = g_strdup (target);
+			pu->sess = sess;
+			sess->server->pending_uploads = g_slist_append (sess->server->pending_uploads, pu);
+
+			tcp_sendf (sess->server, "HTTPPOST %s %" G_GOFFSET_FORMAT "\r\n", filename, size);
+			
+			g_free (filename);
+			g_object_unref (info);
+			g_object_unref (gfile);
+			return TRUE;
+		}
+		g_object_unref (gfile);
+	}
+
 	upload_file (sess, target, file);
 	return TRUE;
 }

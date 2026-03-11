@@ -426,6 +426,14 @@ typedef struct session
 	void (*scrollback_replay_marklast) (struct session *sess);
 } session;
 
+typedef struct pending_upload
+{
+	char *filename;
+	char *filepath;
+	char *target;
+	struct session *sess;
+} pending_upload;
+
 /* SASL Mechanisms */
 #define MECH_PLAIN 0
 #define MECH_EXTERNAL 1
@@ -523,6 +531,7 @@ typedef struct server
 	void *network;						/* points to entry in servlist.c or NULL! */
 
 	GHashTable *batch_types;			/* active IRCv3 batches (id -> type) */
+	GSList *pending_uploads;			/* pending draft/file-upload requests */
 	GSList *outbound_queue;
 	time_t next_send;						/* cptr->since in ircu */
 	time_t prev_now;					/* previous now-time */

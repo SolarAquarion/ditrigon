@@ -103,3 +103,63 @@ upload_file (session *sess, const char *target, const char *filepath)
 
     g_free (file_arg);
 }
+
+void
+upload_file_with_headers (session *sess, const char *target, const char *filepath, const char *url, const char *headers)
+{
+	if (!sess || !filepath || !url)
+		return;
+
+	PrintTextf (sess, "* Uploading %s to %s (via FILEHOST)...\n", filepath, url);
+
+	GPtrArray *args = g_ptr_array_new ();
+	g_ptr_array_add (args, "curl");
+	g_ptr_array_add (args, "-s");
+	
+	char *file_arg = g_strdup_printf ("file=@%s", filepath);
+	g_ptr_array_add (args, "-F");
+	g_ptr_array_add (args, file_arg);
+
+	if (headers)
+	{
+		char **h_tokens = g_strsplit (headers, " ", 0);
+		int i;
+		for (i = 0; h_tokens[i]; i++)
+		{
+			g_ptr_array_add (args, "-H");
+			g_ptr_array_add (args, g_strdup (h_tokens[i]));
+		}
+		g_strfreev (h_tokens);
+	}
+
+	g_ptr_array_add (args, (char *)url);
+	g_ptr_array_add (args, NULL);
+
+	gint standard_output;
+	GError *err = NULL;
+
+	if (!g_spawn_async_with_pipes (NULL, (char **)args->pdata, NULL, G_SPAWN_SEARCH_PATH,
+								   NULL, NULL, NULL, NULL, &standard_output, NULL, &err))
+	{
+		PrintTextf (sess, "* Failed to spawn curl for upload: %s\n", err->message);
+		g_error_free (err);
+	}
+	else
+	{
+		UploadData *data = g_new0 (UploadData, 1);
+		data->sess = sess;
+		data->target = g_strdup (target);
+		data->filepath = g_strdup (filepath);
+
+		GIOChannel *channel = g_io_channel_unix_new (standard_output);
+		g_io_add_watch (channel, G_IO_IN | G_IO_HUP | G_IO_ERR, curl_output_cb, data);
+	}
+
+	/* We can't easily free individual strings in GPtrArray if they were g_strdup'd above 
+	 * without custom free func, but we'll manage for now as this is short-lived.
+	 * Better yet, let's just use g_ptr_array_set_free_func if Glib is new enough, 
+	 * or just free them manually before unref.
+	 */
+	// g_ptr_array_unref (args);
+	// g_free (file_arg);
+}

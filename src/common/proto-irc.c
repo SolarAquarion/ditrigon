@@ -36,6 +36,7 @@
 #include "notify.h"
 #include "plugin.h"
 #include "server.h"
+#include "proto-irc.h"
 #include "text.h"
 #include "outbound.h"
 #include "util.h"
@@ -941,6 +942,8 @@ process_numeric (session * sess, int n,
 
 	case 730: /* RPL_MONONLINE */
 		notify_set_online_list (serv, word[4] + 1, tags_data);
+		break;	case 754: // RPL_FILEHOST (draft/file-upload)
+		inbound_filehost (serv, word, tags_data);
 		break;
 
 	case 731: /* RPL_MONOFFLINE */

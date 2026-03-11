@@ -22,7 +22,6 @@
 #include <stdio.h>
 #include <sys/types.h>
 #include <time.h>
-
 #include <unistd.h>
 
 #define WANTARPA
@@ -43,6 +42,8 @@
 #include "ctcp.h"
 #include "hexchatc.h"
 #include "chanopt.h"
+#include "proto-irc.h"
+#include "upload.h"
 
 
 void
@@ -2313,6 +2314,32 @@ inbound_batch (session *sess, char *id, char *type, const message_tags_data *tag
 				serv->inside_chathistory = FALSE;
 			}
 			g_hash_table_remove (serv->batch_types, id + 1);
+		}
+	}
+}void
+inbound_filehost (server *serv, char *word[], const message_tags_data *tags_data)
+{
+	/* RPL_FILEHOST (754): <nick> <filename> <url> [headers] */
+	char *filename = word[4];
+	char *url = word[5];
+	char *headers = word[6] && word[6][0] ? word[6] : NULL;
+	GSList *iter;
+
+	for (iter = serv->pending_uploads; iter; iter = iter->next)
+	{
+		pending_upload *pu = iter->data;
+		if (g_strcmp0 (pu->filename, filename) == 0)
+		{
+			/* Found it! */
+			upload_file_with_headers (pu->sess, pu->target, pu->filepath, url, headers);
+			
+			/* Cleanup */
+			serv->pending_uploads = g_slist_delete_link (serv->pending_uploads, iter);
+			g_free (pu->filename);
+			g_free (pu->filepath);
+			g_free (pu->target);
+			g_free (pu);
+			break;
 		}
 	}
 }
