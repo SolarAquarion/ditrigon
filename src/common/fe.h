@@ -101,6 +101,7 @@ void fe_userlist_insert (struct session *sess, struct User *newuser, gboolean se
 int fe_userlist_remove (struct session *sess, struct User *user);
 void fe_userlist_rehash (struct session *sess, struct User *user);
 void fe_userlist_update (struct session *sess, struct User *user);
+void fe_session_sidebar_update (struct session *sess);
 void fe_userlist_numbers (struct session *sess);
 void fe_userlist_clear (struct session *sess);
 void fe_userlist_set_selected (struct session *sess);

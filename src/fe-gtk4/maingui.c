@@ -30,6 +30,19 @@ static GtkWidget *input_composer_box;
 static GtkWidget *input_nick_box;
 static GtkWidget *input_nick_button;
 static GtkWidget *input_send_button;
+static guint typing_paused_timeout = 0;
+
+static gboolean
+typing_paused_cb (gpointer userdata)
+{
+	if (current_sess && current_sess->typing_active)
+	{
+		tcp_sendf (current_sess->server, "@+typing=paused TAGMSG %s\r\n", current_sess->channel);
+		current_sess->typing_active = 0;
+	}
+	typing_paused_timeout = 0;
+	return G_SOURCE_REMOVE;
+}
 static gboolean pane_positions_ready;
 static GtkCssProvider *maingui_css_provider;
 static guint userlist_split_anim_source;
@@ -985,6 +998,12 @@ entry_changed_cb (GtkEditable *editable, gpointer userdata)
 	if (text && text[0] == '/' && text[1] != '/')
 		return;
 
+	if (typing_paused_timeout)
+	{
+		g_source_remove (typing_paused_timeout);
+		typing_paused_timeout = 0;
+	}
+
 	now = time (NULL);
 	if (text && text[0])
 	{
@@ -994,6 +1013,7 @@ entry_changed_cb (GtkEditable *editable, gpointer userdata)
 			current_sess->typing_active = 1;
 			current_sess->typing_sent = now;
 		}
+		typing_paused_timeout = g_timeout_add_seconds (5, typing_paused_cb, NULL);
 	}
 	else if (current_sess->typing_active)
 	{
@@ -1364,6 +1384,12 @@ fe_new_window (struct session *sess, int focus)
 void
 fe_new_server (struct server *serv)
 {
+}
+
+static void
+preview_callback (struct session *sess, URLPreviewData *preview, gpointer user_data)
+{
+	fe_gtk4_xtext_append_preview (sess, preview);
 }
 
 void

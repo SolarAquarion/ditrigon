@@ -1759,6 +1759,8 @@ static const char * const supported_caps[] = {
 	"batch",
 	"labeled-response",
 	"draft/file-upload",
+	"draft/chathistory",
+	"typing",
 
 	/* ZNC */
 	"znc.in/server-time-iso",
@@ -1892,6 +1894,10 @@ inbound_cap_ls (server *serv, char *nick, char *extensions_str,
 		{
 			if (!g_strcmp0 (extension, supported_caps[x]))
 			{
+				if (!g_strcmp0 (extension, "draft/file-upload") && value)
+				{
+					g_strlcpy (serv->upload_url, value, sizeof (serv->upload_url));
+				}
 				g_strlcat (buffer, extension, sizeof(buffer));
 				g_strlcat (buffer, " ", sizeof(buffer));
 				want_cap = TRUE;
@@ -2150,6 +2156,7 @@ typing_timeout_cb (gpointer user_data)
 			fe_userlist_update (sess, u);
 		}
 
+		fe_session_sidebar_update (sess);
 		g_hash_table_remove (sess->typing_users, nick);
 	}
 
@@ -2212,6 +2219,8 @@ inbound_tagmsg (session *sess, const char *nick, const char *target, const messa
 			u->typing = TRUE;
 			fe_userlist_update (sess, u);
 		}
+
+		fe_session_sidebar_update (sess);
 	}
 	else if (g_strcmp0 (tags_data->typing, "paused") == 0 || g_strcmp0 (tags_data->typing, "done") == 0)
 	{
@@ -2228,6 +2237,43 @@ inbound_tagmsg (session *sess, const char *nick, const char *target, const messa
 		{
 			u->typing = FALSE;
 			fe_userlist_update (sess, u);
+		}
+
+		fe_session_sidebar_update (sess);
+	}
+}
+
+void
+inbound_batch (session *sess, char *id, char *type, const message_tags_data *tags_data)
+{
+	server *serv = sess->server;
+
+	if (!id || id[0] == '\0')
+		return;
+
+	if (id[0] == '+')
+	{
+		/* start batch */
+		if (type)
+		{
+			g_hash_table_insert (serv->batch_types, g_strdup (id + 1), g_strdup (type));
+			if (g_strcmp0 (type, "chathistory") == 0 || g_strcmp0 (type, "draft/chathistory") == 0)
+			{
+				serv->inside_chathistory = TRUE;
+			}
+		}
+	}
+	else if (id[0] == '-')
+	{
+		/* end batch */
+		char *btype = g_hash_table_lookup (serv->batch_types, id + 1);
+		if (btype)
+		{
+			if (g_strcmp0 (btype, "chathistory") == 0 || g_strcmp0 (btype, "draft/chathistory") == 0)
+			{
+				serv->inside_chathistory = FALSE;
+			}
+			g_hash_table_remove (serv->batch_types, id + 1);
 		}
 	}
 }

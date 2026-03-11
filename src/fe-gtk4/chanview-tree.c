@@ -107,6 +107,9 @@ tree_node_icon_name (HcChanNode *node)
 		return "chat-message-new-symbolic";
 
 	sess = node->sess;
+	if (sess && sess->typing_users && g_hash_table_size (sess->typing_users) > 0)
+		return "document-edit-symbolic";
+
 	if (!sess)
 	{
 		if (node->children)
@@ -1639,6 +1642,19 @@ fe_gtk4_chanview_tree_update_label (session *sess)
 	g_free (label);
 	if (server_node != node)
 		tree_refresh_node (server_node);
+}
+
+void
+fe_gtk4_chanview_tree_update_typing (session *sess)
+{
+	HcChanNode *node;
+
+	if (!sess)
+		return;
+
+	node = tree_session_lookup (sess);
+	if (node)
+		tree_refresh_node (node);
 }
 
 void

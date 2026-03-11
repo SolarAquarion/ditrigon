@@ -37,6 +37,14 @@ fe_gtk4_session_sidebar_update_label (session *sess)
 	fe_gtk4_chanview_tree_update_label (sess);
 }
 
+void fe_gtk4_chanview_tree_update_typing (session *sess);
+
+void
+fe_session_sidebar_update (session *sess)
+{
+	fe_gtk4_chanview_tree_update_typing (sess);
+}
+
 void
 fe_gtk4_chanview_note_activity (session *sess, int color)
 {
