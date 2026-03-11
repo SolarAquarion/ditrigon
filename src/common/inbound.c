@@ -1312,6 +1312,7 @@ dns_name_callback (GObject *obj, GAsyncResult *result, gpointer user_data)
 		PrintText (sess, _("Not found"));
 }
 
+
 void
 do_dns (session *sess, char *nick, char *host,
 		const message_tags_data *tags_data)
@@ -1685,6 +1686,10 @@ inbound_toggle_caps (server *serv, const char *extensions_str, gboolean enable)
 			serv->have_message_tags = enable;
 		else if (!strcmp (extension, "echo-message"))
 			serv->have_echo_message = enable;
+		else if (!strcmp (extension, "batch"))
+			serv->have_batch = enable;
+		else if (!strcmp (extension, "labeled-response"))
+			serv->have_labeled_response = enable;
 		else if (!strcmp (extension, "sasl"))
 		{
 			serv->have_sasl = enable;
@@ -1749,6 +1754,8 @@ static const char * const supported_caps[] = {
 	"message-tags",
 	"msgid",
 	"echo-message",
+	"batch",
+	"labeled-response",
 
 	/* ZNC */
 	"znc.in/server-time-iso",

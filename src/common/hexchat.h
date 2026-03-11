@@ -577,6 +577,8 @@ typedef struct server
 	unsigned int have_echo_message:1;	/* cap echo-message */
 	unsigned int have_server_time:1;	/* cap server-time */
 	unsigned int have_sasl:1;		/* SASL capability */
+	unsigned int have_batch:1;		/* cap batch */
+	unsigned int have_labeled_response:1;	/* cap labeled-response */
 	unsigned int have_except:1;	/* ban exemptions +e */
 	unsigned int have_invite:1;	/* invite exemptions +I */
 	unsigned int have_cert:1;	/* have loaded a cert */
