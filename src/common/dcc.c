@@ -648,7 +648,7 @@ dcc_chat_line (struct DCC *dcc, char *line)
 	if (!sess)
 		sess = dcc->serv->front_session;
 
-	sprintf (portbuf, "%d", dcc->port);
+	g_snprintf (portbuf, sizeof (portbuf), "%d", dcc->port);
 
 	word[0] = "DCC Chat Text";
 	word[1] = net_ip (dcc->addr);
@@ -718,7 +718,7 @@ dcc_read_chat (GIOChannel *source, GIOCondition condition, struct DCC *dcc)
 				if (would_block ())
 					return TRUE;
 			}
-			sprintf (portbuf, "%d", dcc->port);
+			g_snprintf (portbuf, sizeof (portbuf), "%d", dcc->port);
 			EMIT_SIGNAL (XP_TE_DCCCHATF, dcc->serv->front_session, dcc->nick,
 							 net_ip (dcc->addr), portbuf,
 							 errorstring ((len < 0) ? sock_error () : 0), 0);
@@ -1795,8 +1795,16 @@ dcc_accept (GIOChannel *source, GIOCondition condition, struct DCC *dcc)
 
 		if (enforce_peer_addr && ntohl (CAddr.sin_addr.s_addr) != expected_addr)
 		{
-			closesocket (sok);
-			continue;
+			if (prefs.hex_dcc_strict_ip)
+			{
+				closesocket (sok);
+				continue;
+			}
+			else
+			{
+				PrintTextf (dcc->serv->front_session, "DCC peer IP mismatch: Expected %s, got %s. Continuing because hex_dcc_strict_ip is disabled.\n",
+							net_ip(htonl(expected_addr)), net_ip(CAddr.sin_addr.s_addr));
+			}
 		}
 
 		break;

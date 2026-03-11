@@ -201,7 +201,7 @@ cfg_get_str (char *cfg, const char *var, char *dest, int dest_len)
 {
 	char buffer[128];	/* should be plenty for a variable name */
 
-	sprintf (buffer, "%s ", var);	/* add one space, this way it works against var - var2 checks too */
+	g_snprintf (buffer, sizeof (buffer), "%s ", var);	/* add one space, this way it works against var - var2 checks too */
 
 	while (1)
 	{
@@ -379,6 +379,7 @@ const struct prefs vars[] =
 	{"dcc_save_nick", P_OFFINT (hex_dcc_save_nick), TYPE_BOOL},
 	{"dcc_send_fillspaces", P_OFFINT (hex_dcc_send_fillspaces), TYPE_BOOL},
 	{"dcc_stall_timeout", P_OFFINT (hex_dcc_stall_timeout), TYPE_INT},
+	{"dcc_strict_ip", P_OFFINT (hex_dcc_strict_ip), TYPE_BOOL},
 	{"dcc_timeout", P_OFFINT (hex_dcc_timeout), TYPE_INT},
 
 	{"flood_ctcp_num", P_OFFINT (hex_flood_ctcp_num), TYPE_INT},
@@ -826,8 +827,8 @@ load_default_config(void)
 	prefs.hex_url_grabber_limit = 100; 		/* 0 means unlimited */
 
 	/* STRINGS */
-	strcpy (prefs.hex_away_reason, _("I'm busy"));
-	strcpy (prefs.hex_completion_suffix, ",");
+	safe_strcpy (prefs.hex_away_reason, _("I'm busy"), sizeof (prefs.hex_away_reason));
+	safe_strcpy (prefs.hex_completion_suffix, ",", sizeof (prefs.hex_completion_suffix));
 	if (g_get_user_special_dir (G_USER_DIRECTORY_DOWNLOAD))
 	{
 		safe_strcpy (prefs.hex_dcc_dir, g_get_user_special_dir (G_USER_DIRECTORY_DOWNLOAD), sizeof(prefs.hex_dcc_dir));
@@ -838,21 +839,21 @@ load_default_config(void)
 		safe_strcpy (prefs.hex_dcc_dir, download_dir, sizeof(prefs.hex_dcc_dir));
 		g_free (download_dir);
 	}
-	strcpy (prefs.hex_gui_ulist_doubleclick, "QUERY %s");
-	strcpy (prefs.hex_input_command_char, "/");
-	strcpy (prefs.hex_irc_logmask, "%n"G_DIR_SEPARATOR_S"%c.log");
+	safe_strcpy (prefs.hex_gui_ulist_doubleclick, "QUERY %s", sizeof (prefs.hex_gui_ulist_doubleclick));
+	safe_strcpy (prefs.hex_input_command_char, "/", sizeof (prefs.hex_input_command_char));
+	safe_strcpy (prefs.hex_irc_logmask, "%n"G_DIR_SEPARATOR_S"%c.log", sizeof (prefs.hex_irc_logmask));
 	safe_strcpy (prefs.hex_irc_nick1, username, sizeof(prefs.hex_irc_nick1));
 	safe_strcpy (prefs.hex_irc_nick2, username, sizeof(prefs.hex_irc_nick2));
 	g_strlcat (prefs.hex_irc_nick2, "_", sizeof(prefs.hex_irc_nick2));
 	safe_strcpy (prefs.hex_irc_nick3, username, sizeof(prefs.hex_irc_nick3));
 	g_strlcat (prefs.hex_irc_nick3, "__", sizeof(prefs.hex_irc_nick3));
-	strcpy (prefs.hex_irc_no_hilight, "NickServ,ChanServ,InfoServ,N,Q");
+	safe_strcpy (prefs.hex_irc_no_hilight, "NickServ,ChanServ,InfoServ,N,Q", sizeof (prefs.hex_irc_no_hilight));
 	safe_strcpy (prefs.hex_irc_part_reason, _("Leaving"), sizeof(prefs.hex_irc_part_reason));
 	safe_strcpy (prefs.hex_irc_quit_reason, prefs.hex_irc_part_reason, sizeof(prefs.hex_irc_quit_reason));
 	safe_strcpy (prefs.hex_irc_real_name, realname, sizeof(prefs.hex_irc_real_name));
 	safe_strcpy (prefs.hex_irc_user_name, username, sizeof(prefs.hex_irc_user_name));
-	strcpy (prefs.hex_stamp_log_format, "%b %d %H:%M:%S ");
-	strcpy (prefs.hex_stamp_text_format, "[%H:%M:%S] ");
+	safe_strcpy (prefs.hex_stamp_log_format, "%b %d %H:%M:%S ", sizeof (prefs.hex_stamp_log_format));
+	safe_strcpy (prefs.hex_stamp_text_format, "[%H:%M:%S] ", sizeof (prefs.hex_stamp_text_format));
 
 	font = fe_get_default_font ();
 	if (font)
@@ -862,11 +863,11 @@ load_default_config(void)
 	}
 	else
 	{
-		strcpy (prefs.hex_text_font, DEF_FONT);
-		strcpy (prefs.hex_text_font_main, DEF_FONT);
+		safe_strcpy (prefs.hex_text_font, DEF_FONT, sizeof (prefs.hex_text_font));
+		safe_strcpy (prefs.hex_text_font_main, DEF_FONT, sizeof (prefs.hex_text_font_main));
 	}
 
-	strcpy (prefs.hex_text_font_alternative, DEF_FONT_ALTER);
+	safe_strcpy (prefs.hex_text_font_alternative, DEF_FONT_ALTER, sizeof (prefs.hex_text_font_alternative));
 	langs = get_default_spell_languages ();
 	safe_strcpy (prefs.hex_text_spell_langs, langs, sizeof(prefs.hex_text_spell_langs));
 
