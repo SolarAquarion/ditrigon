@@ -1011,6 +1011,17 @@ static char * const pevt_changenick_help[] = {
 	N_("New nickname"),
 };
 
+static char * const pevt_chghost_help[] = {
+	N_("Nickname"),
+	N_("User name"),
+	N_("Host name"),
+};
+
+static char * const pevt_setname_help[] = {
+	N_("Nickname"),
+	N_("Real name"),
+};
+
 static char * const pevt_newtopic_help[] = {
 	N_("Nick of person who changed the topic"),
 	N_("Topic"),

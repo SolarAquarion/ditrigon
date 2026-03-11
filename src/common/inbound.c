@@ -1459,7 +1459,23 @@ inbound_user_info (session *sess, char *chan, char *user, char *host,
 	{
 		who_sess = find_channel (serv, chan);
 		if (who_sess)
+		{
+			struct User *u = userlist_find (who_sess, nick);
+			if (u)
+			{
+				if (user && host)
+				{
+					if (!u->hostname || strcmp (u->hostname, uhost))
+						EMIT_SIGNAL_TIMESTAMP (XP_TE_CHGHOST, who_sess, nick, user, host, NULL, 0, tags_data->timestamp);
+				}
+				if (realname && *realname)
+				{
+					if (!u->realname || strcmp (u->realname, realname))
+						EMIT_SIGNAL_TIMESTAMP (XP_TE_SETNAME, who_sess, nick, realname, NULL, NULL, 0, tags_data->timestamp);
+				}
+			}
 			userlist_add_hostname (who_sess, nick, uhost, realname, servname, account, away);
+		}
 		else
 		{
 			if (serv->doing_dns && nick && host)
@@ -1468,7 +1484,7 @@ inbound_user_info (session *sess, char *chan, char *user, char *host,
 	}
 	else
 	{
-		/* came from WHOIS, not channel specific */
+		/* came from WHOIS, not channel specific or CHGHOST/SETNAME */
 		for (list = sess_list; list; list = list->next)
 		{
 			sess = list->data;
@@ -1477,6 +1493,20 @@ inbound_user_info (session *sess, char *chan, char *user, char *host,
 
 			if (sess->type == SESS_CHANNEL)
 			{
+				struct User *u = userlist_find (sess, nick);
+				if (u)
+				{
+					if (user && host)
+					{
+						if (!u->hostname || strcmp (u->hostname, uhost))
+							EMIT_SIGNAL_TIMESTAMP (XP_TE_CHGHOST, sess, nick, user, host, NULL, 0, tags_data->timestamp);
+					}
+					if (realname && *realname)
+					{
+						if (!u->realname || strcmp (u->realname, realname))
+							EMIT_SIGNAL_TIMESTAMP (XP_TE_SETNAME, sess, nick, realname, NULL, NULL, 0, tags_data->timestamp);
+					}
+				}
 				userlist_add_hostname (sess, nick, uhost, realname, servname, account, away);
 			}
 			else if (sess->type == SESS_DIALOG && uhost && !serv->p_cmp (sess->channel, nick))
