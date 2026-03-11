@@ -579,6 +579,8 @@ typedef struct server
 	unsigned int have_message_tags:1;	/* cap message-tags */
 	unsigned int have_echo_message:1;	/* cap echo-message */
 	unsigned int have_server_time:1;	/* cap server-time */
+	unsigned int have_chathistory:1;	/* cap draft/chathistory */
+	unsigned int inside_chathistory:1;	/* currently replaying history */
 	unsigned int have_sasl:1;		/* SASL capability */
 	unsigned int have_batch:1;		/* cap batch */
 	unsigned int have_labeled_response:1;	/* cap labeled-response */

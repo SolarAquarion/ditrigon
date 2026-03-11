@@ -848,7 +848,7 @@ PrintTextTimeStamp (session *sess, char *text, time_t timestamp)
 
 	log_write (sess, text, timestamp);
 	scrollback_save (sess, text, timestamp);
-	fe_print_text (sess, text, timestamp, FALSE);
+	fe_print_text (sess, text, timestamp, sess->server->inside_chathistory);
 	g_free (text);
 }
 

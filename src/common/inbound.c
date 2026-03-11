@@ -1131,6 +1131,13 @@ inbound_nameslist_end (server *serv, char *chan,
 		sess->end_of_names = TRUE;
 		sess->ignore_names = FALSE;
 		fe_userlist_numbers (sess);
+
+		if (serv->have_chathistory)
+		{
+			/* Request the last 50 messages to fill the buffer with context */
+			tcp_sendf (serv, "CHATHISTORY LATEST %s * * 50\r\n", sess->channel);
+		}
+
 		return TRUE;
 	}
 	return FALSE;
@@ -1708,6 +1715,8 @@ inbound_toggle_caps (server *serv, const char *extensions_str, gboolean enable)
 				|| !strcmp (extension, "znc.in/server-time")
 				|| !strcmp (extension, "znc.in/server-time-iso"))
 			serv->have_server_time = enable;
+		else if (!strcmp (extension, "draft/chathistory"))
+			serv->have_chathistory = enable;
 		else if (!strcmp (extension, "away-notify"))
 			serv->have_awaynotify = enable;
 		else if (!strcmp (extension, "account-tag"))
