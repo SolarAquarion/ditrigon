@@ -1028,8 +1028,8 @@ auto_reconnect (server *serv, int send_quit, int err)
 			s = list->data;
 			if (s->type == SESS_CHANNEL && s->channel[0])
 			{
-				strcpy (s->waitchannel, s->channel);
-				strcpy (s->willjoinchannel, s->channel);
+				safe_strcpy (s->waitchannel, s->channel, CHANLEN);
+				safe_strcpy (s->willjoinchannel, s->channel, CHANLEN);
 			}
 			list = list->next;
 		}
@@ -1337,7 +1337,7 @@ server_disconnect (session * sess, int sendquit, int err)
 		notc_msg (sess);
 		return;
 	case 1:							  /* it was in the process of connecting */
-		sprintf (tbuf, "%d", sess->server->childpid);
+		g_snprintf (tbuf, sizeof (tbuf), "%d", sess->server->childpid);
 		EMIT_SIGNAL (XP_TE_STOPCONNECT, sess, tbuf, NULL, NULL, NULL, 0);
 		return;
 	case 3:
@@ -2171,7 +2171,7 @@ server_new (void)
 	serv->childread = -1;
 	serv->childwrite = -1;
 	serv->childpid = -1;
-	strcpy (serv->nick, prefs.hex_irc_nick1);
+	safe_strcpy (serv->nick, prefs.hex_irc_nick1, sizeof (serv->nick));
 	server_set_defaults (serv);
 
 	serv_list = g_slist_prepend (serv_list, serv);

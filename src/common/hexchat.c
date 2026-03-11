@@ -258,7 +258,7 @@ lag_check (void)
 			lag = now - serv->ping_recv;
 			if (prefs.hex_net_ping_timeout != 0 && lag > prefs.hex_net_ping_timeout && lag > 0)
 			{
-				sprintf (tbuf, "%" G_GINT64_FORMAT, (gint64) lag);
+				g_snprintf (tbuf, sizeof (tbuf), "%" G_GINT64_FORMAT, (gint64) lag);
 				EMIT_SIGNAL (XP_TE_PINGTIMEOUT, serv->server_session, tbuf, NULL,
 								 NULL, NULL, 0);
 				if (prefs.hex_net_auto_reconnect)

@@ -219,6 +219,7 @@ struct hexchatprefs
 	int hex_dcc_port_first;
 	int hex_dcc_port_last;
 	int hex_dcc_stall_timeout;
+	int hex_dcc_strict_ip;
 	int hex_dcc_timeout;
 	int hex_flood_ctcp_num;				/* flood */
 	int hex_flood_ctcp_time;			/* seconds of floods */
