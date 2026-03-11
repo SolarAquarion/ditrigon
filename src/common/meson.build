@@ -22,6 +22,7 @@ common_sources = [
   'tree.c',
   'url.c',
   'userlist.c',
+  'upload.c',
   'util.c'
 ]
 
@@ -30,6 +31,7 @@ common_sysinfo_deps = []
 common_deps = [
   libgio_dep,
   libcanberra_dep,
+  libsoup_dep,
 ] + global_deps
 
 common_includes = [

@@ -219,7 +219,6 @@ struct hexchatprefs
 	int hex_dcc_port_first;
 	int hex_dcc_port_last;
 	int hex_dcc_stall_timeout;
-	int hex_dcc_strict_ip;
 	int hex_dcc_timeout;
 	int hex_flood_ctcp_num;				/* flood */
 	int hex_flood_ctcp_time;			/* seconds of floods */
@@ -406,10 +405,16 @@ typedef struct session
 
 	int type;					/* SESS_* */
 
+<<<<<<< HEAD
 	GHashTable *typing_users;	/* keys: nick, values: timer tag */
 	time_t typing_sent;			/* Timestamp when we last sent active typing */
 	unsigned int typing_active:1; /* Are we currently sending typing indicators? */
 
+||||||| constructed fake ancestor
+=======
+	GHashTable *typing_users;	/* keys: nick, values: timer tag */
+
+>>>>>>> ircv3: implement support for typing indicators (+typing)
 	int lastact_idx;		/* the sess_list_by_lastact[] index of the list we're in.
 							 * For valid values, see defines of LACT_*. */
 
@@ -504,7 +509,6 @@ typedef struct server
 	char hostname[128];				/* real ip number */
 	char servername[128];			/* what the server says is its name */
 	char password[1024];
-	char upload_url[512];           /* draft/file-upload endpoint */
 	char nick[NICKLEN];
 	char linebuf[8704];				/* RFC says 512 chars including \r\n, IRCv3 message tags add 8191, plus the NUL byte */
 	char *last_away_reason;
@@ -575,12 +579,8 @@ typedef struct server
 	unsigned int have_extjoin:1;	/* cap extended-join */
 	unsigned int have_account_tag:1;	/* cap account-tag */
 	unsigned int have_message_tags:1;	/* cap message-tags */
-	unsigned int have_echo_message:1;	/* cap echo-message */
 	unsigned int have_server_time:1;	/* cap server-time */
 	unsigned int have_sasl:1;		/* SASL capability */
-	unsigned int have_batch:1;		/* cap batch */
-	unsigned int have_labeled_response:1;	/* cap labeled-response */
-	unsigned int have_file_upload:1; /* cap draft/file-upload */
 	unsigned int have_except:1;	/* ban exemptions +e */
 	unsigned int have_invite:1;	/* invite exemptions +I */
 	unsigned int have_cert:1;	/* have loaded a cert */

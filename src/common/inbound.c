@@ -1690,6 +1690,8 @@ inbound_toggle_caps (server *serv, const char *extensions_str, gboolean enable)
 			serv->have_batch = enable;
 		else if (!strcmp (extension, "labeled-response"))
 			serv->have_labeled_response = enable;
+		else if (!strcmp (extension, "draft/file-upload"))
+			serv->have_file_upload = enable;
 		else if (!strcmp (extension, "sasl"))
 		{
 			serv->have_sasl = enable;
@@ -1756,6 +1758,7 @@ static const char * const supported_caps[] = {
 	"echo-message",
 	"batch",
 	"labeled-response",
+	"draft/file-upload",
 
 	/* ZNC */
 	"znc.in/server-time-iso",

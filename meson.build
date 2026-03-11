@@ -15,6 +15,10 @@ cc = meson.get_compiler('c')
 glib_dep = dependency('glib-2.0', version: '>= 2.44')
 libgio_dep = dependency('gio-2.0', version: '>= 2.44.0')
 libgmodule_dep = dependency('gmodule-2.0')
+libsoup_dep = dependency('libsoup-3.0', required: false)
+if not libsoup_dep.found()
+  libsoup_dep = dependency('libsoup-2.4', required: false)
+endif
 
 libcanberra_dep = dependency('libcanberra', version: '>= 0.22',
                              required: get_option('libcanberra'))
@@ -42,6 +46,7 @@ config_h.set('USE_OPENSSL', libssl_dep.found())
 config_h.set('USE_LIBCANBERRA', libcanberra_dep.found())
 config_h.set('USE_DBUS', dbus_glib_dep.found())
 config_h.set('USE_PLUGIN', get_option('plugin'))
+config_h.set('USE_LIBSOUP', libsoup_dep.found())
 
 config_h.set('G_DISABLE_SINGLE_INCLUDES', true)
 config_h.set('GTK_DISABLE_DEPRECATED', true)

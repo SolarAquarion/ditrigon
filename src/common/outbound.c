@@ -38,6 +38,7 @@
 
 #include "hexchat.h"
 #include "plugin.h"
+#include "upload.h"
 #include "ignore.h"
 #include "util.h"
 #include "fe.h"
@@ -3772,6 +3773,29 @@ url_join_only (server *serv, char *tbuf, char *channel, char *key)
 }
 
 static int
+cmd_upload (struct session *sess, char *tbuf, char *word[], char *word_eol[])
+{
+	char *target;
+	char *file;
+
+	if (word[2][0] == '\0') {
+		PrintText (sess, _("Usage: UPLOAD [<target>] <file>\n"));
+		return TRUE;
+	}
+
+	if (word[3][0] == '\0') {
+		target = sess->channel;
+		file = word[2];
+	} else {
+		target = word[2];
+		file = word_eol[3];
+	}
+
+	upload_file (sess, target, file);
+	return TRUE;
+}
+
+static int
 cmd_url (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 {
 	if (word[2][0])
@@ -4178,6 +4202,7 @@ const struct commands xc_cmds[] = {
 	{"UNLOAD", cmd_unload, 0, 0, 1, N_("UNLOAD <name>, unloads a plugin or script")},
 	{"UNQUIET", cmd_unquiet, 1, 1, 1,
 	 N_("UNQUIET <mask> [<mask>...], unquiets the specified masks if supported by the server.")},
+	{"UPLOAD", cmd_upload, 0, 0, 1, N_("UPLOAD [<target>] <file>, POSTs a file via HTTP and sends the URL")},
 	{"URL", cmd_url, 0, 0, 1, N_("URL <url>, opens a URL in your browser")},
 	{"USELECT", cmd_uselect, 0, 1, 0,
 	 N_("USELECT [-a] [-s] <nick1> <nick2> etc, highlights nick(s) in channel userlist")},
