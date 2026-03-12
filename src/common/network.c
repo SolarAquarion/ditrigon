@@ -25,6 +25,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <glib.h>
+#include <gio/gio.h>
 
 #include <unistd.h>
 
@@ -60,10 +61,9 @@ net_set_socket_options (int sok)
 char *
 net_ip (guint32 addr)
 {
-	struct in_addr ia;
-
-	ia.s_addr = htonl (addr);
-	return inet_ntoa (ia);
+	guint32 n_addr = htonl (addr);
+	g_autoptr(GInetAddress) gaddr = g_inet_address_new_from_bytes ((const guint8 *)&n_addr, G_SOCKET_FAMILY_IPV4);
+	return g_inet_address_to_string (gaddr);
 }
 
 void

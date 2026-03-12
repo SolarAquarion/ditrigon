@@ -42,6 +42,7 @@
 #include <unistd.h>
 
 #include "hexchat.h"
+#include <gio/gio.h>
 #include "util.h"
 #include "fe.h"
 #include "outbound.h"
@@ -83,15 +84,6 @@ static gboolean dcc_read (GIOChannel *, GIOCondition, struct DCC *);
 static gboolean dcc_read_ack (GIOChannel *source, GIOCondition condition, struct DCC *dcc);
 static int dcc_check_timeouts (void);
 
-static gboolean
-dcc_connect_in_progress (int err)
-{
-	return err == EINPROGRESS || err == EWOULDBLOCK || err == EAGAIN
-#ifdef EALREADY
-		|| err == EALREADY
-#endif
-		;
-}
 
 static gboolean
 parse_u16_field (const char *text, int *value)
@@ -172,7 +164,6 @@ static dcc_peer_addr_state
 dcc_get_known_peer_addr (struct DCC *dcc, guint32 *addr_out)
 {
 	struct User *user;
-	struct hostent *h;
 	const char *host;
 	const char *at;
 	struct in_addr parsed_addr;
@@ -184,19 +175,36 @@ dcc_get_known_peer_addr (struct DCC *dcc, guint32 *addr_out)
 	at = strrchr (user->hostname, '@');
 	host = (at != NULL && at[1] != '\0') ? at + 1 : user->hostname;
 
-	if (inet_aton (host, &parsed_addr) != 0)
-	{
-		*addr_out = ntohl (parsed_addr.s_addr);
-		return DCC_PEER_ADDR_KNOWN;
+	g_autoptr(GInetAddress) addr = g_inet_address_new_from_string (host);
+	if (addr) {
+		if (g_inet_address_get_family (addr) == G_SOCKET_FAMILY_IPV4) {
+			const guint8 *bytes = g_inet_address_to_bytes (addr);
+			memcpy (&parsed_addr.s_addr, bytes, 4);
+			*addr_out = ntohl (parsed_addr.s_addr);
+			return DCC_PEER_ADDR_KNOWN;
+		}
+		return DCC_PEER_ADDR_UNRESOLVABLE;
 	}
 
-	h = gethostbyname (host);
-	if (h == NULL || h->h_length != 4 || h->h_addr_list[0] == NULL)
+	g_autoptr(GResolver) resolver = g_resolver_get_default ();
+	g_autoptr(GError) error = NULL;
+	GList *addresses = g_resolver_lookup_by_name (resolver, host, NULL, &error);
+	if (!addresses)
 		return DCC_PEER_ADDR_UNRESOLVABLE;
 
-	memcpy (&parsed_addr.s_addr, h->h_addr_list[0], 4);
-	*addr_out = ntohl (parsed_addr.s_addr);
-	return DCC_PEER_ADDR_KNOWN;
+	for (GList *l = addresses; l != NULL; l = l->next) {
+		GInetAddress *resolved_addr = G_INET_ADDRESS (l->data);
+		if (g_inet_address_get_family (resolved_addr) == G_SOCKET_FAMILY_IPV4) {
+			const guint8 *bytes = g_inet_address_to_bytes (resolved_addr);
+			memcpy (&parsed_addr.s_addr, bytes, 4);
+			*addr_out = ntohl (parsed_addr.s_addr);
+			g_resolver_free_addresses (addresses);
+			return DCC_PEER_ADDR_KNOWN;
+		}
+	}
+
+	g_resolver_free_addresses (addresses);
+	return DCC_PEER_ADDR_UNRESOLVABLE;
 }
 
 static int new_id(void)
@@ -409,7 +417,6 @@ dcc_check_timeouts (void)
 static int
 dcc_lookup_proxy (char *host, struct sockaddr_in *addr)
 {
-	struct hostent *h;
 	static char *cache_host = NULL;
 	static guint32 cache_addr;
 
@@ -425,14 +432,22 @@ dcc_lookup_proxy (char *host, struct sockaddr_in *addr)
 		cache_host = NULL;
 	}
 
-	h = gethostbyname (host);
-	if (h != NULL && h->h_length == 4 && h->h_addr_list[0] != NULL)
-	{
-		memcpy (&addr->sin_addr, h->h_addr, 4);
-		memcpy (&cache_addr, h->h_addr, 4);
-		cache_host = g_strdup (host);
-		/* cppcheck-suppress memleak */
-		return TRUE;
+	g_autoptr(GResolver) resolver = g_resolver_get_default ();
+	g_autoptr(GError) error = NULL;
+	GList *addresses = g_resolver_lookup_by_name (resolver, host, NULL, &error);
+	if (addresses) {
+		for (GList *l = addresses; l != NULL; l = l->next) {
+			GInetAddress *resolved_addr = G_INET_ADDRESS (l->data);
+			if (g_inet_address_get_family (resolved_addr) == G_SOCKET_FAMILY_IPV4) {
+				const guint8 *bytes = g_inet_address_to_bytes (resolved_addr);
+				memcpy (&addr->sin_addr, bytes, 4);
+				memcpy (&cache_addr, bytes, 4);
+				cache_host = g_strdup (host);
+				g_resolver_free_addresses (addresses);
+				return TRUE;
+			}
+		}
+		g_resolver_free_addresses (addresses);
 	}
 
 	return FALSE;
@@ -443,50 +458,46 @@ dcc_lookup_proxy (char *host, struct sockaddr_in *addr)
 static int
 dcc_connect_sok (struct DCC *dcc)
 {
-	int sok;
-	struct sockaddr_in addr;
+	g_autoptr(GSocket) socket = NULL;
+	g_autoptr(GInetAddress) iaddr = NULL;
+	g_autoptr(GSocketAddress) saddr = NULL;
+	g_autoptr(GError) error = NULL;
 
-	sok = socket (AF_INET, SOCK_STREAM, 0);
-	if (sok == -1)
+	socket = g_socket_new (G_SOCKET_FAMILY_IPV4, G_SOCKET_TYPE_STREAM, G_SOCKET_PROTOCOL_TCP, &error);
+	if (!socket)
+	{
+		g_warning ("Failed to create DCC socket: %s", error->message);
 		return -1;
+	}
 
-	memset (&addr, 0, sizeof (addr));
-	addr.sin_family = AF_INET;
+	g_socket_set_blocking (socket, FALSE);
+
 	if (DCC_USE_PROXY ())
 	{
+		struct sockaddr_in addr;
 		if (!dcc_lookup_proxy (prefs.hex_net_proxy_host, &addr))
-		{
-			closesocket (sok);
 			return -1;
-		}
-		addr.sin_port = htons (prefs.hex_net_proxy_port);
+
+		iaddr = g_inet_address_new_from_bytes ((const guint8 *)&addr.sin_addr, G_SOCKET_FAMILY_IPV4);
+		saddr = g_inet_socket_address_new (iaddr, prefs.hex_net_proxy_port);
 	}
 	else
 	{
-		addr.sin_port = htons (dcc->port);
-		addr.sin_addr.s_addr = htonl (dcc->addr);
+		guint32 n_addr = htonl (dcc->addr);
+		iaddr = g_inet_address_new_from_bytes ((const guint8 *)&n_addr, G_SOCKET_FAMILY_IPV4);
+		saddr = g_inet_socket_address_new (iaddr, dcc->port);
 	}
 
-	if (set_nonblocking (sok) == -1)
+	if (!g_socket_connect (socket, saddr, NULL, &error))
 	{
-		int err = sock_error ();
-		closesocket (sok);
-		errno = err;
-		return -1;
-	}
-
-	if (connect (sok, (struct sockaddr *) &addr, sizeof (addr)) != 0)
-	{
-		int err = sock_error ();
-		if (!dcc_connect_in_progress (err))
+		if (!g_error_matches (error, G_IO_ERROR, G_IO_ERROR_PENDING))
 		{
-			closesocket (sok);
-			errno = err;
+			g_warning ("Failed to connect DCC socket: %s", error->message);
 			return -1;
 		}
 	}
 
-	return sok;
+	return dup (g_socket_get_fd (socket));
 }
 
 static void
@@ -650,8 +661,9 @@ dcc_chat_line (struct DCC *dcc, char *line)
 
 	g_snprintf (portbuf, sizeof (portbuf), "%d", dcc->port);
 
+	g_autofree char *ip = net_ip (dcc->addr);
 	word[0] = "DCC Chat Text";
-	word[1] = net_ip (dcc->addr);
+	word[1] = ip;
 	word[2] = portbuf;
 	word[3] = dcc->nick;
 	word[4] = line;
@@ -718,9 +730,10 @@ dcc_read_chat (GIOChannel *source, GIOCondition condition, struct DCC *dcc)
 				if (would_block ())
 					return TRUE;
 			}
+			g_autofree char *ip = net_ip (dcc->addr);
 			g_snprintf (portbuf, sizeof (portbuf), "%d", dcc->port);
 			EMIT_SIGNAL (XP_TE_DCCCHATF, dcc->serv->front_session, dcc->nick,
-							 net_ip (dcc->addr), portbuf,
+							 ip, portbuf,
 							 errorstring ((len < 0) ? sock_error () : 0), 0);
 			dcc_close (dcc, STAT_FAILED, FALSE);
 			return TRUE;
@@ -981,7 +994,8 @@ dcc_connect_finished (GIOChannel *source, GIOCondition condition, struct DCC *dc
 		return TRUE;
 
 	dcc->dccstat = STAT_ACTIVE;
-	g_snprintf (host, sizeof host, "%s:%d", net_ip (dcc->addr), dcc->port);
+	g_autofree char *ip = net_ip (dcc->addr);
+	g_snprintf (host, sizeof host, "%s:%d", ip, dcc->port);
 
 	switch (dcc->type)
 	{
@@ -1100,8 +1114,9 @@ dcc_wingate_proxy_traverse (GIOChannel *source, GIOCondition condition, struct D
 	struct proxy_state *proxy = dcc->proxy;
 	if (proxy->phase == 0)
 	{
+		g_autofree char *ip = net_ip(dcc->addr);
 		proxy->buffersize = g_snprintf ((char*) proxy->buffer, MAX_PROXY_BUFFER,
-										"%s %d\r\n", net_ip(dcc->addr),
+										"%s %d\r\n", ip,
 										dcc->port);
 		proxy->bufferused = 0;
 		dcc->wiotag = fe_input_add (dcc->sok, FIA_WRITE|FIA_EX,
@@ -1393,9 +1408,9 @@ dcc_http_proxy_traverse (GIOChannel *source, GIOCondition condition, struct DCC 
 
 	if (proxy->phase == 0)
 	{
-		char *auth_data = NULL;
-		char *auth_plain = NULL;
-		char *connect_req = NULL;
+		g_autofree char *auth_data = NULL;
+		g_autofree char *auth_plain = NULL;
+		g_autofree char *connect_req = NULL;
 		gsize request_len;
 
 		if (prefs.hex_net_proxy_auth)
@@ -1403,21 +1418,22 @@ dcc_http_proxy_traverse (GIOChannel *source, GIOCondition condition, struct DCC 
 			auth_plain = g_strdup_printf ("%s:%s",
 							 prefs.hex_net_proxy_user, prefs.hex_net_proxy_pass);
 			auth_data = g_base64_encode ((const guchar *) auth_plain, strlen (auth_plain));
+			g_autofree char *ip = net_ip (dcc->addr);
 			connect_req = g_strdup_printf ("CONNECT %s:%d HTTP/1.0\r\n"
 								   "Proxy-Authorization: Basic %s\r\n"
 								   "\r\n",
-								   net_ip (dcc->addr), dcc->port, auth_data);
+								   ip, dcc->port, auth_data);
 		}
 		else
 		{
+			g_autofree char *ip = net_ip (dcc->addr);
 			connect_req = g_strdup_printf ("CONNECT %s:%d HTTP/1.0\r\n\r\n",
-								   net_ip (dcc->addr), dcc->port);
+								   ip, dcc->port);
 		}
 
 		if (connect_req == NULL)
 		{
-			g_free (auth_data);
-			g_free (auth_plain);
+			PrintText (dcc->serv->front_session, "HTTP\tFailed to create proxy request.\n");
 			dcc->dccstat = STAT_FAILED;
 			fe_dcc_update (dcc);
 			return TRUE;
@@ -1426,9 +1442,6 @@ dcc_http_proxy_traverse (GIOChannel *source, GIOCondition condition, struct DCC 
 		request_len = strlen (connect_req);
 		if (request_len >= MAX_PROXY_BUFFER)
 		{
-			g_free (connect_req);
-			g_free (auth_data);
-			g_free (auth_plain);
 			PrintText (dcc->serv->front_session, "HTTP\tProxy request is too long.\n");
 			dcc->dccstat = STAT_FAILED;
 			fe_dcc_update (dcc);
@@ -1438,9 +1451,6 @@ dcc_http_proxy_traverse (GIOChannel *source, GIOCondition condition, struct DCC 
 		proxy->bufferused = 0;
 		proxy->buffersize = (int) request_len;
 		memcpy (proxy->buffer, connect_req, request_len);
-		g_free (connect_req);
-		g_free (auth_data);
-		g_free (auth_plain);
 		dcc->wiotag = fe_input_add (dcc->sok, FIA_WRITE|FIA_EX,
 									dcc_http_proxy_traverse, dcc);
 		++proxy->phase;
@@ -1802,8 +1812,10 @@ dcc_accept (GIOChannel *source, GIOCondition condition, struct DCC *dcc)
 			}
 			else
 			{
+				g_autofree char *expected_ip = net_ip(expected_addr);
+				g_autofree char *got_ip = net_ip(ntohl(CAddr.sin_addr.s_addr));
 				PrintTextf (dcc->serv->front_session, "DCC peer IP mismatch: Expected %s, got %s. Continuing because hex_dcc_strict_ip is disabled.\n",
-							net_ip(htonl(expected_addr)), net_ip(CAddr.sin_addr.s_addr));
+							expected_ip, got_ip);
 			}
 		}
 
@@ -1834,7 +1846,8 @@ dcc_accept (GIOChannel *source, GIOCondition condition, struct DCC *dcc)
 	dcc->lasttime = dcc->starttime = time (0);
 	dcc->fastsend = prefs.hex_dcc_fast_send;
 
-	g_snprintf (host, sizeof (host), "%s:%d", net_ip (dcc->addr), dcc->port);
+	g_autofree char *ip = net_ip (dcc->addr);
+	g_snprintf (host, sizeof (host), "%s:%d", ip, dcc->port);
 
 	switch (dcc->type)
 	{
@@ -1890,113 +1903,98 @@ dcc_get_my_address (session *sess)	/* the address we'll tell the other person */
 static int
 dcc_listen_init (struct DCC *dcc, session *sess)
 {
-	guint32 my_addr;
-	struct sockaddr_in SAddr;
-	int i, bindretval = -1;
-	socklen_t len;
+	g_autoptr(GSocket) socket = NULL;
+	g_autoptr(GError) error = NULL;
+	g_autoptr(GSocketAddress) saddr = NULL;
+	g_autoptr(GSocketAddress) bound_saddr = NULL;
+	g_autoptr(GInetAddress) my_iaddr = NULL;
+	GSocketAddress *incoming_saddr;
 
-	dcc->sok = socket (AF_INET, SOCK_STREAM, 0);
-	if (dcc->sok == -1)
-		return FALSE;
-
-	memset (&SAddr, 0, sizeof (struct sockaddr_in));
-
-	len = sizeof (SAddr);
-	if (getsockname (dcc->serv->sok, (struct sockaddr *) &SAddr, &len) != 0)
+	socket = g_socket_new (G_SOCKET_FAMILY_IPV4, G_SOCKET_TYPE_STREAM, G_SOCKET_PROTOCOL_TCP, &error);
+	if (!socket)
 	{
-		PrintTextf (sess, "Failed to determine local address (%s).\n",
-					 errorstring (errno));
+		PrintTextf (sess, "Failed to create DCC listener socket (%s).\n", error->message);
 		return FALSE;
 	}
 
-	SAddr.sin_family = AF_INET;
+	g_socket_set_option (socket, SOL_SOCKET, SO_REUSEADDR, 1, NULL);
 
-	/*if local_ip is specified use that*/
+	incoming_saddr = g_socket_get_local_address (g_socket_new_from_fd (dcc->serv->sok, NULL), NULL);
+	if (incoming_saddr)
+	{
+		my_iaddr = g_object_ref (g_inet_socket_address_get_address (G_INET_SOCKET_ADDRESS (incoming_saddr)));
+		g_object_unref (incoming_saddr);
+	}
+	else
+	{
+		PrintText (sess, "Failed to determine local address.\n");
+		return FALSE;
+	}
+
 	if (prefs.local_ip != 0xffffffff)
 	{
-		my_addr = prefs.local_ip;
-		SAddr.sin_addr.s_addr = prefs.local_ip;
+		guint32 n_addr = prefs.local_ip;
+		g_object_unref (my_iaddr);
+		my_iaddr = g_inet_address_new_from_bytes ((const guint8 *)&n_addr, G_SOCKET_FAMILY_IPV4);
 	}
-	/*otherwise use the default*/
-	else
-		my_addr = SAddr.sin_addr.s_addr;
 
-	/*if we have a valid portrange try to use that*/
 	if (prefs.hex_dcc_port_first > 0)
 	{
-		SAddr.sin_port = 0;
-		i = 0;
-		while ((prefs.hex_dcc_port_last > ntohs(SAddr.sin_port)) &&
-				(bindretval == -1))
+		int port = prefs.hex_dcc_port_first;
+		while (port <= prefs.hex_dcc_port_last)
 		{
-			SAddr.sin_port = htons (prefs.hex_dcc_port_first + i);
-			i++;
-			/*printf("Trying to bind against port: %d\n",ntohs(SAddr.sin_port));*/
-			bindretval = bind (dcc->sok, (struct sockaddr *) &SAddr, sizeof (SAddr));
+			saddr = g_inet_socket_address_new (my_iaddr, port);
+			if (g_socket_bind (socket, saddr, TRUE, NULL))
+				break;
+			g_object_unref (saddr);
+			saddr = NULL;
+			port++;
 		}
-
-		/* with a small port range, reUseAddr is needed */
-		{
-			int reuse = 1;
-			if (setsockopt (dcc->sok, SOL_SOCKET, SO_REUSEADDR,
-							  (char *) &reuse, sizeof (reuse)) != 0)
-				g_warning ("Failed to set SO_REUSEADDR on DCC listener");
-		}
-
-	} else
+	}
+	else
 	{
-		/* try random port */
-		SAddr.sin_port = 0;
-		bindretval = bind (dcc->sok, (struct sockaddr *) &SAddr, sizeof (SAddr));
+		saddr = g_inet_socket_address_new (my_iaddr, 0);
+		if (!g_socket_bind (socket, saddr, TRUE, &error))
+		{
+			PrintTextf (sess, "Failed to bind DCC listener (%s).\n", error->message);
+			return FALSE;
+		}
 	}
 
-	if (bindretval == -1)
+	if (!saddr)
 	{
-		/* failed to bind */
-		PrintText (sess, "Failed to bind to any address or port.\n");
+		PrintText (sess, "Failed to bind to any port in the DCC port range.\n");
 		return FALSE;
 	}
 
-	len = sizeof (SAddr);
-	if (getsockname (dcc->sok, (struct sockaddr *) &SAddr, &len) != 0)
+	bound_saddr = g_socket_get_local_address (socket, &error);
+	if (!bound_saddr)
 	{
-		PrintTextf (sess, "Failed to determine DCC listener port (%s).\n",
-					 errorstring (errno));
+		PrintTextf (sess, "Failed to determine DCC listener port (%s).\n", error->message);
 		return FALSE;
 	}
 
-	dcc->port = ntohs (SAddr.sin_port);
-
-	/*if we have a dcc_ip, we use that, so the remote client can connect*/
-	/*else we try to take an address from hex_dcc_ip*/
-	/*if something goes wrong we tell the client to connect to our LAN ip*/
+	dcc->port = g_inet_socket_address_get_port (G_INET_SOCKET_ADDRESS (bound_saddr));
 	dcc->addr = dcc_get_my_address (sess);
-
-	/*if nothing else worked we use the address we bound to*/
 	if (dcc->addr == 0)
-	   dcc->addr = my_addr;
-
-	dcc->addr = ntohl (dcc->addr);
-
-	if (set_nonblocking (dcc->sok) == -1)
 	{
-		PrintTextf (sess, "Failed to set DCC listener nonblocking mode (%s).\n",
-					 errorstring (errno));
-		return FALSE;
+		const guint8 *bytes = g_inet_address_to_bytes (my_iaddr);
+		memcpy (&dcc->addr, bytes, 4);
+		dcc->addr = ntohl (dcc->addr);
 	}
-	if (listen (dcc->sok, 1) != 0)
+	else
 	{
-		PrintTextf (sess, "Failed to listen on DCC socket (%s).\n",
-					 errorstring (errno));
-		return FALSE;
+		dcc->addr = ntohl (dcc->addr);
 	}
-	if (set_blocking (dcc->sok) == -1)
+
+	if (!g_socket_listen (socket, &error))
 	{
-		PrintTextf (sess, "Failed to restore DCC listener blocking mode (%s).\n",
-					 errorstring (errno));
+		PrintTextf (sess, "Failed to listen on DCC socket (%s).\n", error->message);
 		return FALSE;
 	}
 
+	g_socket_set_blocking (socket, FALSE);
+	dcc->sok = dup (g_socket_get_fd (socket));
 	dcc->iotag = fe_input_add (dcc->sok, FIA_READ|FIA_EX, dcc_accept, dcc);
 
 	return TRUE;
@@ -2017,10 +2015,10 @@ void
 dcc_send (struct session *sess, char *to, char *filename, gint64 maxcps, int passive)
 {
 	char outbuf[512];
-	GFileInfo *file_info;
-	GFile *file;
+	g_autoptr(GFileInfo) file_info = NULL;
+	g_autoptr(GFile) file = NULL;
 	struct DCC *dcc;
-	gchar *filename_fs;
+	g_autofree gchar *filename_fs = NULL;
 	GFileType file_type;
 	goffset file_size;
 
@@ -2082,14 +2080,10 @@ dcc_send (struct session *sess, char *to, char *filename, gint64 maxcps, int pas
 
 		dcc_close (dcc, 0, TRUE); /* dcc_close will free dcc->file */
 
-		g_free (filename_fs);
-
 		return;
 	}
 
 	file_info = g_file_query_info (file, G_FILE_ATTRIBUTE_STANDARD_SIZE "," G_FILE_ATTRIBUTE_STANDARD_TYPE, G_FILE_QUERY_INFO_NONE, NULL, NULL);
-
-	g_object_unref (file);
 
 	if (file_info == NULL)
 	{
@@ -2098,23 +2092,17 @@ dcc_send (struct session *sess, char *to, char *filename, gint64 maxcps, int pas
 
 		dcc_close (dcc, 0, TRUE); /* dcc_close will free dcc->file */
 
-		g_free (filename_fs);
-
 		return;
 	}
 
 	file_type = g_file_info_get_file_type (file_info);
 	file_size = g_file_info_get_size (file_info);
 
-	g_object_unref (file_info);
-
 	if (*file_part (filename) == '\0' || file_type == G_FILE_TYPE_DIRECTORY || file_size <= 0)
 	{
 		PrintText (sess, "Cannot send directories or empty files.\n");
 
 		dcc_close (dcc, 0, TRUE); /* dcc_close will free dcc->file */
-
-		g_free (filename_fs);
 
 		return;
 	}
@@ -2125,8 +2113,6 @@ dcc_send (struct session *sess, char *to, char *filename, gint64 maxcps, int pas
 	dcc->size = file_size;
 	dcc->type = TYPE_SEND;
 	dcc->fp = g_open (filename_fs, OFLAGS | O_RDONLY, 0);
-
-	g_free (filename_fs);
 
 	if (dcc->fp == -1)
 	{
@@ -2140,16 +2126,17 @@ dcc_send (struct session *sess, char *to, char *filename, gint64 maxcps, int pas
 	if (passive || dcc_listen_init (dcc, sess))
 	{
 		char havespaces = 0;
-		while (*filename)
+		char *fname_ptr = dcc->file; // Use a temporary pointer for iteration
+		while (*fname_ptr)
 		{
-			if (*filename == ' ')
+			if (*fname_ptr == ' ')
 			{
 				if (prefs.hex_dcc_send_fillspaces)
-				    *filename = '_';
+					*fname_ptr = '_';
 				else
-				havespaces = 1;
+					havespaces = 1;
 			}
-			filename++;
+			fname_ptr++;
 		}
 		dcc->nick = g_strdup (to);
 		if (prefs.hex_gui_autoopen_send)
@@ -2199,7 +2186,7 @@ find_dcc_from_id (server *serv, const char *nick, int id, int type)
 			 !rfc_casecmp (dcc->nick, nick) &&
 			 dcc->pasvid == id &&
 			 dcc->dccstat == STAT_QUEUED && dcc->type == type)
-		return dcc;
+			return dcc;
 		list = list->next;
 	}
 	return NULL;
@@ -2277,112 +2264,54 @@ dcc_change_nick (struct server *serv, char *oldnick, char *newnick)
 static gboolean
 is_same_file (struct DCC *dcc, struct DCC *new_dcc)
 {
-	gboolean result = FALSE;
-	gchar *filename_fs = NULL, *new_filename_fs = NULL;
-	GFile *file = NULL, *new_file = NULL;
-	GFileInfo *file_info = NULL, *new_file_info = NULL;
-	char *file_id = NULL, *new_file_id = NULL;
-	char *filesystem_id = NULL, *new_filesystem_id = NULL;
-
 	/* if it's the same filename, must be same */
 	if (strcmp (dcc->destfile, new_dcc->destfile) == 0)
+		return TRUE;
+
+	g_autofree gchar *filename_fs = g_filename_from_utf8 (dcc->destfile, -1, NULL, NULL, NULL);
+	g_autofree gchar *new_filename_fs = g_filename_from_utf8 (new_dcc->destfile, -1, NULL, NULL, NULL);
+	if (!filename_fs || !new_filename_fs)
+		return FALSE;
+
+	g_autoptr(GFile) file = g_file_new_for_path (filename_fs);
+	g_autoptr(GFile) new_file = g_file_new_for_path (new_filename_fs);
+	if (!file || !new_file)
+		return FALSE;
+
+	g_autoptr(GFileInfo) file_info = g_file_query_info (file, G_FILE_ATTRIBUTE_ID_FILE "," G_FILE_ATTRIBUTE_ID_FILESYSTEM, G_FILE_QUERY_INFO_NONE, NULL, NULL);
+	g_autoptr(GFileInfo) new_file_info = g_file_query_info (new_file, G_FILE_ATTRIBUTE_ID_FILE "," G_FILE_ATTRIBUTE_ID_FILESYSTEM, G_FILE_QUERY_INFO_NONE, NULL, NULL);
+	if (!file_info || !new_file_info)
+		return FALSE;
+
+	g_autofree char *file_id = g_file_info_get_attribute_as_string (file_info, G_FILE_ATTRIBUTE_ID_FILE);
+	g_autofree char *new_file_id = g_file_info_get_attribute_as_string (new_file_info, G_FILE_ATTRIBUTE_ID_FILE);
+
+	g_autofree char *filesystem_id = g_file_info_get_attribute_as_string (file_info, G_FILE_ATTRIBUTE_ID_FILESYSTEM);
+	g_autofree char *new_filesystem_id = g_file_info_get_attribute_as_string (new_file_info, G_FILE_ATTRIBUTE_ID_FILESYSTEM);
+
+	if (file_id != NULL && new_file_id != NULL && filesystem_id != NULL && new_filesystem_id != NULL &&
+	    strcmp (file_id, new_file_id) == 0 && strcmp (filesystem_id, new_filesystem_id) == 0)
 	{
 		return TRUE;
 	}
 
-	filename_fs = g_filename_from_utf8 (dcc->file, -1, NULL, NULL, NULL);
-	if (filename_fs == NULL)
-	{
-		goto exit;
-	}
-
-	new_filename_fs = g_filename_from_utf8 (new_dcc->file, -1, NULL, NULL, NULL);
-	if (new_filename_fs == NULL)
-	{
-		goto exit;
-	}
-
-	file = g_file_new_for_path (filename_fs);
-	if (file == NULL)
-	{
-		goto exit;
-	}
-
-	new_file = g_file_new_for_path (new_filename_fs);
-	if (new_file == NULL)
-	{
-		goto exit;
-	}
-
-	file_info = g_file_query_info (file, G_FILE_ATTRIBUTE_ID_FILE "," G_FILE_ATTRIBUTE_ID_FILESYSTEM, G_FILE_QUERY_INFO_NONE, NULL, NULL);
-	if (file_info == NULL)
-	{
-		goto exit;
-	}
-
-	new_file_info = g_file_query_info (new_file, G_FILE_ATTRIBUTE_ID_FILE "," G_FILE_ATTRIBUTE_ID_FILESYSTEM, G_FILE_QUERY_INFO_NONE, NULL, NULL);
-	if (new_file_info == NULL)
-	{
-		goto exit;
-	}
-
-	file_id = g_file_info_get_attribute_as_string (file_info, G_FILE_ATTRIBUTE_ID_FILE);
-	new_file_id = g_file_info_get_attribute_as_string (new_file_info, G_FILE_ATTRIBUTE_ID_FILE);
-
-	filesystem_id = g_file_info_get_attribute_as_string (file_info, G_FILE_ATTRIBUTE_ID_FILE);
-	new_filesystem_id = g_file_info_get_attribute_as_string (new_file_info, G_FILE_ATTRIBUTE_ID_FILE);
-
-	if (file_id != NULL && new_file_id != NULL && filesystem_id != NULL && new_filesystem_id != NULL && strcmp (file_id, new_file_id) == 0 && strcmp (filesystem_id, new_filesystem_id) == 0)
-	{
-		result = TRUE;
-	}
-
-exit:
-	g_free (filename_fs);
-	g_free (new_filename_fs);
-
-	if (file != NULL)
-	{
-		g_object_unref (file);
-	}
-
-	if (new_file != NULL)
-	{
-		g_object_unref (new_file);
-	}
-
-	if (file_info != NULL)
-	{
-		g_object_unref (file_info);
-	}
-
-	if (new_file_info != NULL)
-	{
-		g_object_unref (new_file_info);
-	}
-
-	g_free (file_id);
-	g_free (new_file_id);
-	g_free(filesystem_id);
-	g_free(new_filesystem_id);
-
-	return result;
+	return FALSE;
 }
 
 static void
 update_is_resumable (struct DCC *dcc)
 {
-	gchar *filename_fs = g_filename_from_utf8 (dcc->destfile, -1, NULL, NULL, NULL);
+	g_autofree gchar *filename_fs = g_filename_from_utf8 (dcc->destfile, -1, NULL, NULL, NULL);
 
 	dcc->resumable = 0;
 
 	/* Check the file size */
 	if (filename_fs != NULL && g_access(filename_fs, W_OK) == 0)
 	{
-		GFile *file = g_file_new_for_path (filename_fs);
+		g_autoptr(GFile) file = g_file_new_for_path (filename_fs);
 		if (file != NULL)
 		{
-			GFileInfo *file_info = g_file_query_info (file, G_FILE_ATTRIBUTE_STANDARD_SIZE "," G_FILE_ATTRIBUTE_STANDARD_TYPE, G_FILE_QUERY_INFO_NONE, NULL, NULL);
+			g_autoptr(GFileInfo) file_info = g_file_query_info (file, G_FILE_ATTRIBUTE_STANDARD_SIZE "," G_FILE_ATTRIBUTE_STANDARD_TYPE, G_FILE_QUERY_INFO_NONE, NULL, NULL);
 
 			if (file_info != NULL)
 			{
@@ -2397,16 +2326,12 @@ update_is_resumable (struct DCC *dcc)
 				{
 					dcc->resume_error = 2;
 				}
-
-				g_object_unref (file_info);
 			}
 			else
 			{
 				dcc->resume_errno = errno;
 				dcc->resume_error = 1;
 			}
-
-			g_object_unref(file);
 		}
 		else
 		{
@@ -2419,8 +2344,6 @@ update_is_resumable (struct DCC *dcc)
 		dcc->resume_errno = errno;
 		dcc->resume_error = 1;
 	}
-
-	g_free (filename_fs);
 
 	/* Now verify that this DCC is not already in progress from someone else */
 	if (dcc->resumable)
