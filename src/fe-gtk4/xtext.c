@@ -108,6 +108,16 @@ typedef struct {
 } ImageLoadContext;
 
 static void
+on_image_clicked (GtkGestureClick *gesture, int n_press, double x, double y, gpointer user_data)
+{
+	const char *url = user_data;
+	if (url)
+	{
+		util_exec (url);
+	}
+}
+
+static void
 on_image_loaded (GObject *source_object, GAsyncResult *res, gpointer user_data)
 {
 	ImageLoadContext *ctx = user_data;
@@ -122,7 +132,27 @@ on_image_loaded (GObject *source_object, GAsyncResult *res, gpointer user_data)
 		if (texture)
 		{
 			GtkWidget *image = gtk_image_new_from_paintable (GDK_PAINTABLE (texture));
-			gtk_image_set_pixel_size (GTK_IMAGE (image), 200);
+			
+			/* Dynamic scaling: cap height but allow reasonable width */
+			int w = gdk_texture_get_width (texture);
+			int h = gdk_texture_get_height (texture);
+			if (h > 300)
+			{
+				w = (int)((double)w * (300.0 / (double)h));
+				h = 300;
+			}
+			if (w > 500)
+			{
+				h = (int)((double)h * (500.0 / (double)w));
+				w = 500;
+			}
+			gtk_widget_set_size_request (image, w, h);
+			gtk_widget_set_cursor_from_name (image, "pointer");
+			gtk_widget_set_tooltip_text (image, _("Click to open image in browser"));
+
+			GtkGesture *click = gtk_gesture_click_new ();
+			g_signal_connect_data (click, "released", G_CALLBACK (on_image_clicked), g_strdup (ctx->url), (GClosureNotify)g_free, 0);
+			gtk_widget_add_controller (image, GTK_EVENT_CONTROLLER (click));
 
 			HcSessionState *state = session_state_lookup (ctx->sess);
 			if (state && state->widget && state->widget->view)
