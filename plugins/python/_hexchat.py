@@ -12,7 +12,7 @@ __all__ = [
     'get_list', 'get_lists', 'get_pluginpref', 'get_prefs', 'hook_command',
     'hook_print', 'hook_print_attrs', 'hook_server', 'hook_server_attrs',
     'hook_timer', 'hook_unload', 'list_pluginpref', 'nickcmp', 'prnt',
-    'set_pluginpref', 'strip', 'unhook',
+    'send_notification', 'set_pluginpref', 'strip', 'unhook',
 ]
 
 __doc__ = 'HexChat Scripting Interface'
@@ -92,6 +92,10 @@ def strip(text, length=-1, flags=3):
     ret = __decode(ffi.string(stripped))
     lib.hexchat_free(lib.ph, stripped)
     return ret
+
+
+def send_notification(text):
+    lib.hexchat_send_notification(lib.ph, text.encode())
 
 
 def get_info(name):
