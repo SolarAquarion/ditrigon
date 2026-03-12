@@ -573,8 +573,23 @@ XS (XS_HexChat_print)
 	if (items != 1) {
 		hexchat_print (ph, "Usage: HexChat::Internal::print(text)");
 	} else {
-		text = SvPV_nolen (ST (0));
+		text = (char *) SvPV_nolen (ST (0));
 		hexchat_print (ph, text);
+	}
+	XSRETURN_EMPTY;
+}
+
+static
+XS (XS_HexChat_send_notification)
+{
+	char *text = NULL;
+
+	dXSARGS;
+	if (items != 1) {
+		hexchat_print (ph, "Usage: HexChat::send_notification(text)");
+	} else {
+		text = (char *) SvPV_nolen (ST (0));
+		hexchat_send_notification (ph, text);
 	}
 	XSRETURN_EMPTY;
 }
@@ -1265,6 +1280,7 @@ xs_init (pTHX)
 	newXS ("HexChat::get_prefs", XS_HexChat_get_prefs, __FILE__);
 	newXS ("HexChat::emit_print", XS_HexChat_emit_print, __FILE__);
 	newXS ("HexChat::send_modes", XS_HexChat_send_modes, __FILE__);
+	newXS ("HexChat::Internal::send_notification", XS_HexChat_send_notification, __FILE__);
 	newXS ("HexChat::nickcmp", XS_HexChat_nickcmp, __FILE__);
 
 	newXS ("HexChat::Embed::plugingui_remove", XS_HexChat_Embed_plugingui_remove,

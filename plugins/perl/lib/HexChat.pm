@@ -50,6 +50,7 @@ sub FD_NOTSOCKET ();
 sub get_context;
 sub HexChat::Internal::context_info;
 sub HexChat::Internal::print;
+sub HexChat::Internal::send_notification;
 
 #keep compatibility with Xchat scripts
 sub EAT_XCHAT ();
@@ -71,7 +72,7 @@ our %EXPORT_TAGS = (
 		qw(register nickcmp strip_code send_modes), # misc
 		qw(print prnt printf prntf command commandf emit_print), # output
 		qw(find_context get_context set_context), # context
-		qw(get_info get_prefs get_list context_info user_info), # input
+		qw(get_info get_prefs get_list context_info user_info send_notification), # input
 		qw(plugin_pref_set plugin_pref_get plugin_pref_delete plugin_pref_list), #settings
 	],
 );
@@ -405,6 +406,15 @@ sub prnt {
 
 sub prntf {
 	goto &HexChat::printf;
+}
+
+sub send_notification {
+	my $text = shift @_;
+	return "" unless defined $text;
+	return _do_for_each(
+		sub { HexChat::Internal::send_notification( $text ); },
+		@_
+	);
 }
 
 sub command {
