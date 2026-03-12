@@ -30,6 +30,8 @@ static GtkWidget *input_composer_box;
 static GtkWidget *input_nick_box;
 static GtkWidget *input_nick_button;
 static GtkWidget *input_send_button;
+static GtkWidget *main_search_bar;
+static GtkWidget *main_search_entry;
 static guint typing_paused_timeout = 0;
 
 static gboolean
@@ -190,6 +192,19 @@ maingui_ui_get_widget_typed (GtkBuilder *builder, const char *id, GType type)
 }
 
 static void
+search_changed_cb (GtkSearchEntry *entry, gpointer userdata)
+{
+	const char *text = gtk_editable_get_text (GTK_EDITABLE (entry));
+	fe_gtk4_xtext_search_set_text (text);
+}
+
+static void
+search_stop_cb (GtkSearchEntry *entry, gpointer userdata)
+{
+	fe_gtk4_maingui_toggle_search ();
+}
+
+static void
 maingui_build_main_box_from_ui (void)
 {
 	GtkBuilder *builder;
@@ -232,6 +247,16 @@ maingui_build_chat_layout_from_ui (GtkWidget **chat_scroll_slot,
 		*userlist_slot = maingui_ui_get_widget_typed (builder, "userlist_slot", GTK_TYPE_BOX);
 	if (command_entry_slot)
 		*command_entry_slot = maingui_ui_get_widget_typed (builder, "command_entry_slot", GTK_TYPE_BOX);
+
+	/* Modern Search Bar */
+	main_search_bar = gtk_search_bar_new ();
+	main_search_entry = gtk_search_entry_new ();
+	gtk_widget_set_hexpand (main_search_entry, TRUE);
+	gtk_search_bar_set_child (GTK_SEARCH_BAR (main_search_bar), main_search_entry);
+	gtk_box_prepend (GTK_BOX (main_center_box), main_search_bar);
+	gtk_search_bar_connect_entry (GTK_SEARCH_BAR (main_search_bar), GTK_EDITABLE (main_search_entry));
+	g_signal_connect (main_search_entry, "search-changed", G_CALLBACK (search_changed_cb), NULL);
+	g_signal_connect (main_search_entry, "stop-search", G_CALLBACK (search_stop_cb), NULL);
 
 	g_object_ref_sink (right_box);
 	g_object_unref (builder);
@@ -1389,7 +1414,27 @@ fe_new_server (struct server *serv)
 static void
 preview_callback (struct session *sess, URLPreviewData *preview, gpointer user_data)
 {
+	(void) user_data;
 	fe_gtk4_xtext_append_preview (sess, preview);
+}
+
+void
+fe_gtk4_maingui_toggle_search (void)
+{
+	if (!main_search_bar)
+		return;
+
+	gboolean active = gtk_search_bar_get_search_mode (GTK_SEARCH_BAR (main_search_bar));
+	gtk_search_bar_set_search_mode (GTK_SEARCH_BAR (main_search_bar), !active);
+
+	if (!active)
+	{
+		gtk_widget_grab_focus (main_search_entry);
+	}
+	else
+	{
+		gtk_widget_grab_focus (command_entry);
+	}
 }
 
 void

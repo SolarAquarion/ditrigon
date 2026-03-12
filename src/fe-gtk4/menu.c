@@ -2052,7 +2052,7 @@ win_action_window_search (GSimpleAction *action, GVariant *parameter, gpointer u
 	(void) parameter;
 	(void) userdata;
 
-	fe_gtk4_xtext_search_prompt ();
+	fe_gtk4_maingui_toggle_search ();
 }
 
 static void

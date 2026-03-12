@@ -3479,6 +3479,14 @@ xtext_search_prompt_cb (int cancel, char *text, gpointer userdata)
 }
 
 void
+fe_gtk4_xtext_search_set_text (const char *text)
+{
+	g_free (xtext_search_text);
+	xtext_search_text = text ? g_strdup (text) : NULL;
+	xtext_search_find (TRUE);
+}
+
+void
 fe_gtk4_xtext_search_prompt (void)
 {
 	fe_get_str (_("Search for:"), xtext_search_text ? xtext_search_text : "",

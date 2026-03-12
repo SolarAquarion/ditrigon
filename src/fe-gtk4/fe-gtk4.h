@@ -99,6 +99,8 @@ void fe_gtk4_xtext_apply_prefs (void);
 void fe_gtk4_xtext_search_prompt (void);
 void fe_gtk4_xtext_search_next (void);
 void fe_gtk4_xtext_search_prev (void);
+void fe_gtk4_xtext_search_set_text (const char *text);
+void fe_gtk4_maingui_toggle_search (void);
 
 void fe_gtk4_userlist_init (void);
 void fe_gtk4_userlist_cleanup (void);
