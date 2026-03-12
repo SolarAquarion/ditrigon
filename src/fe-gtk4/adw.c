@@ -11,6 +11,7 @@ static GtkWidget *adw_menu_button;
 static GtkWidget *adw_sidebar_button;
 static GtkWidget *adw_userlist_button;
 static GtkWidget *adw_title_widget;
+static GtkWidget *adw_toast_overlay;
 
 static void
 adw_new_item_clicked_cb (AdwSplitButton *button, gpointer userdata)
@@ -161,11 +162,11 @@ fe_gtk4_adw_window_set_content (GtkWidget *window, GtkWidget *content)
 	adw_menu_button = NULL;
 	if (ADW_IS_WINDOW (window))
 	{
-		adw_toolbar_view = adw_toolbar_view_new ();
-		adw_toolbar_view_set_content (ADW_TOOLBAR_VIEW (adw_toolbar_view), content);
-		adw_toolbar_view_set_extend_content_to_top_edge (ADW_TOOLBAR_VIEW (adw_toolbar_view), FALSE);
 		adw_toolbar_view_set_top_bar_style (ADW_TOOLBAR_VIEW (adw_toolbar_view), ADW_TOOLBAR_FLAT);
-		adw_window_set_content (ADW_WINDOW (window), adw_toolbar_view);
+
+		adw_toast_overlay = adw_toast_overlay_new ();
+		adw_toast_overlay_set_child (ADW_TOAST_OVERLAY (adw_toast_overlay), adw_toolbar_view);
+		adw_window_set_content (ADW_WINDOW (window), adw_toast_overlay);
 		return;
 	}
 
@@ -175,7 +176,10 @@ fe_gtk4_adw_window_set_content (GtkWidget *window, GtkWidget *content)
 		adw_toolbar_view_set_content (ADW_TOOLBAR_VIEW (adw_toolbar_view), content);
 		adw_toolbar_view_set_extend_content_to_top_edge (ADW_TOOLBAR_VIEW (adw_toolbar_view), FALSE);
 		adw_toolbar_view_set_top_bar_style (ADW_TOOLBAR_VIEW (adw_toolbar_view), ADW_TOOLBAR_FLAT);
-		adw_application_window_set_content (ADW_APPLICATION_WINDOW (window), adw_toolbar_view);
+
+		adw_toast_overlay = adw_toast_overlay_new ();
+		adw_toast_overlay_set_child (ADW_TOAST_OVERLAY (adw_toast_overlay), adw_toolbar_view);
+		adw_application_window_set_content (ADW_APPLICATION_WINDOW (window), adw_toast_overlay);
 		return;
 	}
 
@@ -302,4 +306,14 @@ fe_gtk4_adw_set_menu_model (GMenuModel *model)
 {
 	if (adw_menu_button)
 		gtk_menu_button_set_menu_model (GTK_MENU_BUTTON (adw_menu_button), model);
+}
+
+void
+fe_toast_send (const char *text)
+{
+	if (adw_toast_overlay)
+	{
+		AdwToast *toast = adw_toast_new (text);
+		adw_toast_overlay_add_toast (ADW_TOAST_OVERLAY (adw_toast_overlay), toast);
+	}
 }
