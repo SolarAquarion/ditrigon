@@ -4,6 +4,10 @@
 #include "fe-gtk4.h"
 #include "sexy-spell-entry.h"
 #include "../common/url.h"
+#include "../common/modes.h"
+#include "../common/proto-irc.h"
+#include "../common/hexchat.h"
+#include "../common/fe.h"
 #include "../common/url_preview.h"
 #include <adwaita.h>
 
@@ -206,6 +210,28 @@ emoji_picked_cb (GtkEmojiChooser *chooser, const char *text, gpointer userdata)
 }
 
 static void
+server_search_cb (GtkWidget *button, gpointer userdata)
+{
+	(void) button;
+	(void) userdata;
+	const char *text = gtk_editable_get_text (GTK_EDITABLE (main_search_entry));
+	session *sess = fe_gtk4_window_target_session ();
+
+	if (text && *text && sess && sess->server->have_soju_search)
+	{
+		if (is_channel (sess->server, sess->channel))
+		{
+			tcp_sendf (sess->server, "SEARCH buffer=%s text=%s\r\n", sess->channel, text);
+		}
+		else
+		{
+			tcp_sendf (sess->server, "SEARCH text=%s\r\n", text);
+		}
+		fe_print_text (sess, _("Searching server..."), time (0), TRUE);
+	}
+}
+
+static void
 search_changed_cb (GtkSearchEntry *entry, gpointer userdata)
 {
 	const char *text = gtk_editable_get_text (GTK_EDITABLE (entry));
@@ -266,7 +292,17 @@ maingui_build_chat_layout_from_ui (GtkWidget **chat_scroll_slot,
 	main_search_bar = gtk_search_bar_new ();
 	main_search_entry = gtk_search_entry_new ();
 	gtk_widget_set_hexpand (main_search_entry, TRUE);
-	gtk_search_bar_set_child (GTK_SEARCH_BAR (main_search_bar), main_search_entry);
+
+	GtkWidget *search_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
+	gtk_box_append (GTK_BOX (search_box), main_search_entry);
+
+	GtkWidget *server_search_button = gtk_button_new_with_label (_("Search Server"));
+	gtk_widget_add_css_class (server_search_button, "flat");
+	gtk_widget_set_tooltip_text (server_search_button, _("Search through server-side history (SOJU)"));
+	g_signal_connect (server_search_button, "clicked", G_CALLBACK (server_search_cb), NULL);
+	gtk_box_append (GTK_BOX (search_box), server_search_button);
+
+	gtk_search_bar_set_child (GTK_SEARCH_BAR (main_search_bar), search_box);
 	gtk_box_prepend (GTK_BOX (main_center_box), main_search_bar);
 	gtk_search_bar_connect_entry (GTK_SEARCH_BAR (main_search_bar), GTK_EDITABLE (main_search_entry));
 	g_signal_connect (main_search_entry, "search-changed", G_CALLBACK (search_changed_cb), NULL);

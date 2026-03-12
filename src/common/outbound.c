@@ -2930,6 +2930,37 @@ cmd_names (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 }
 
 static int
+cmd_network (struct session *sess, char *tbuf, char *word[], char *word_eol[])
+{
+	if (!sess->server->have_soju_network)
+	{
+		PrintText (sess, _("Bouncer network management is only supported on servers with soju.im/network capability."));
+		return TRUE;
+	}
+
+	if (!word[2][0])
+	{
+		tcp_sendf (sess->server, "BOUNCER LIST\r\n");
+		return TRUE;
+	}
+
+	if (!g_ascii_strcasecmp (word[2], "ADD"))
+	{
+		tcp_sendf (sess->server, "BOUNCER ADD %s\r\n", word_eol[3]);
+	}
+	else if (!g_ascii_strcasecmp (word[2], "DEL"))
+	{
+		tcp_sendf (sess->server, "BOUNCER DEL %s\r\n", word[3]);
+	}
+	else
+	{
+		PrintText (sess, _("Usage: /NETWORK [ADD|DEL] [args]"));
+	}
+
+	return TRUE;
+}
+
+static int
 cmd_nctcp (struct session *sess, char *tbuf, char *word[], char *word_eol[])
 {
 	if (*word_eol[3])
@@ -4161,6 +4192,8 @@ const struct commands xc_cmds[] = {
 	 N_("NAMES [channel], Lists the nicks on the channel")},
 	{"NCTCP", cmd_nctcp, 1, 0, 1,
 	 N_("NCTCP <nick> <message>, Sends a CTCP notice")},
+	{"NETWORK", cmd_network, 0, 0, 1,
+	 N_("NETWORK [ADD|DEL] [args], manages bouncer networks (SOJU)")},
 	{"NEWSERVER", cmd_newserver, 0, 0, 1, N_("NEWSERVER [-noconnect] <hostname> [<port>]")},
 	{"NICK", cmd_nick, 0, 0, 1, N_("NICK <nickname>, sets your nick")},
 
