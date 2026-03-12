@@ -165,6 +165,12 @@ static int api_hexchat_print(lua_State *L)
 	return 0;
 }
 
+static int api_hexchat_send_notification(lua_State *L)
+{
+	hexchat_send_notification(ph, luaL_checkstring(L, 1));
+	return 0;
+}
+
 static int api_hexchat_emit_print(lua_State *L)
 {
 	hexchat_emit_print(ph, luaL_checkstring(L, 1), luaL_optstring(L, 2, NULL), luaL_optstring(L, 3, NULL), luaL_optstring(L, 4, NULL), luaL_optstring(L, 5, NULL), luaL_optstring(L, 6, NULL), NULL);
@@ -1050,6 +1056,7 @@ static luaL_Reg api_hexchat[] = {
 	{"set_context", api_hexchat_set_context},
 	{"attrs", api_hexchat_attrs},
 	{"iterate", api_hexchat_iterate},
+	{"send_notification", api_hexchat_send_notification},
 	{NULL, NULL}
 };
 
