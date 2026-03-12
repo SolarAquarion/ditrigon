@@ -189,8 +189,13 @@ scrollback_save (session *sess, char *text, time_t stamp)
 	if (!ostream)
 		return;
 
-	if (!stamp)
-		stamp = time(0);
+	if (stamp > 0)
+	{
+		if (stamp > sess->last_msg_time)
+			sess->last_msg_time = stamp;
+	}
+	else
+		stamp = time (0);
 	if (sizeof (stamp) == 4)	/* gcc will optimize one of these out */
 		buf = g_strdup_printf ("T %d ", (int) stamp);
 	else

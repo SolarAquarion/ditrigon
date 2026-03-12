@@ -1135,8 +1135,19 @@ inbound_nameslist_end (server *serv, char *chan,
 
 		if (serv->have_chathistory)
 		{
-			/* Request the last 50 messages to fill the buffer with context */
-			tcp_sendf (serv, "CHATHISTORY LATEST %s * * 50\r\n", sess->channel);
+			if (sess->last_msg_time > 0)
+			{
+				char timebuf[32];
+				struct tm *tm = gmtime (&sess->last_msg_time);
+				strftime (timebuf, sizeof (timebuf), "%Y-%m-%dT%H:%M:%SZ", tm);
+				/* Fetch up to 100 messages since we were last here */
+				tcp_sendf (serv, "CHATHISTORY AFTER %s %s 100\r\n", sess->channel, timebuf);
+			}
+			else
+			{
+				/* Request the last 50 messages to fill the buffer with context */
+				tcp_sendf (serv, "CHATHISTORY LATEST %s * * 50\r\n", sess->channel);
+			}
 		}
 
 		return TRUE;

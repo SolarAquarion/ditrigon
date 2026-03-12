@@ -422,6 +422,7 @@ typedef struct session
 	int done_away_check:1;	/* done checking for away status changes */
 	tab_state_flags tab_state;
 	tab_state_flags last_tab_state; /* before event is handled */
+	time_t last_msg_time;			/* time of the last received message for CHATHISTORY AFTER */
 	gtk_xtext_search_flags lastlog_flags;
 	void (*scrollback_replay_marklast) (struct session *sess);
 } session;
