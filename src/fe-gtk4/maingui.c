@@ -977,6 +977,32 @@ session_sidebar_remove (session *sess)
 	fe_gtk4_chanview_remove (sess);
 }
 
+static char *
+convert_markdown_to_irc (const char *text)
+{
+	GRegex *regex;
+	char *tmp1, *tmp2, *tmp3;
+
+	/* Bold: *text* -> \x02text\x02 */
+	regex = g_regex_new ("\\*([^\\*]+)\\*", 0, 0, NULL);
+	tmp1 = g_regex_replace (regex, text, -1, 0, "\x02\\1\x02", 0, NULL);
+	g_regex_unref (regex);
+
+	/* Italic: _text_ -> \x1dtext\x1d */
+	regex = g_regex_new ("_([^_]+)_", 0, 0, NULL);
+	tmp2 = g_regex_replace (regex, tmp1, -1, 0, "\x1d\\1\x1d", 0, NULL);
+	g_regex_unref (regex);
+	g_free (tmp1);
+
+	/* Underline: ~text~ -> \x1ftext\x1f */
+	regex = g_regex_new ("~([^~]+)~", 0, 0, NULL);
+	tmp3 = g_regex_replace (regex, tmp2, -1, 0, "\x1f\\1\x1f", 0, NULL);
+	g_regex_unref (regex);
+	g_free (tmp2);
+
+	return tmp3;
+}
+
 static void
 send_command (const char *cmd)
 {
@@ -985,7 +1011,11 @@ send_command (const char *cmd)
 	if (!cmd || !*cmd || !current_tab)
 		return;
 
-	line = g_strdup (cmd);
+	if (cmd[0] != '/')
+		line = convert_markdown_to_irc (cmd);
+	else
+		line = g_strdup (cmd);
+
 	handle_multiline (current_tab, line, TRUE, FALSE);
 	g_free (line);
 }
