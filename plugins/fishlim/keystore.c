@@ -127,6 +127,8 @@ char *keystore_get_key(const char *nick, enum fish_mode *mode) {
             *mode = FISH_ECB_MODE;
         else if (*key_mode == '2')
             *mode = FISH_CBC_MODE;
+        else if (*key_mode == '3')
+            *mode = FISH_AES_CBC_MODE;
         g_free(key_mode);
     }
 

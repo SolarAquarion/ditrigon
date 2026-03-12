@@ -88,6 +88,10 @@ unsigned long encoded_len(size_t plaintext_len, enum fish_mode mode) {
 
         case FISH_ECB_MODE:
             return ecb_len(plaintext_len);
+
+        case FISH_AES_CBC_MODE:
+            /* AES-256-CBC: IV(16) + plaintext + PKCS7 padding (up to 16) */
+            return base64_len(16 + plaintext_len + (16 - plaintext_len % 16));
     }
 
     return 0;

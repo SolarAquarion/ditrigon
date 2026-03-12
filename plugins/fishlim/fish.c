@@ -34,12 +34,15 @@
 #include <openssl/evp.h>
 #include <openssl/blowfish.h>
 #include <openssl/rand.h>
+#include <openssl/aes.h>
 
 #include "keystore.h"
 #include "fish.h"
 #include "utils.h"
 
 #define IB 64
+#define AES256_KEY_LEN 32
+#define AES_IV_LEN 16
 /* rfc 2812; 512 - CR-LF = 510 */
 static const int MAX_COMMAND_LENGTH = 510;
 static const char fish_base64[] = "./0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -353,6 +356,106 @@ char *fish_cipher(const char *plaintext, size_t plaintext_len, const char *key, 
 }
 
 /**
+ * Encrypt or decrypt data with AES-256-CBC cipher.
+ *
+ * @param [in] plaintext        Bytes to encrypt or decrypt
+ * @param [in] plaintext_len    Size of plaintext
+ * @param [in] key              Bytes of key (will be padded/truncated to 32 bytes)
+ * @param [in] keylen           Size of key
+ * @param [in] encode           1 for encrypt, 0 for decrypt
+ * @param [out] ciphertext_len  The bytes written
+ * @return Array of char with data encrypted or decrypted
+ */
+static char *fish_aes_cipher(const char *plaintext, size_t plaintext_len, const char *key, size_t keylen, int encode, size_t *ciphertext_len) {
+    EVP_CIPHER_CTX *ctx;
+    EVP_CIPHER *cipher = NULL;
+    int bytes_written = 0;
+    int final_written = 0;
+    unsigned char *output = NULL;
+    unsigned char *iv = NULL;
+    unsigned char aes_key[AES256_KEY_LEN];
+
+    *ciphertext_len = 0;
+
+    if (plaintext_len == 0 || keylen == 0)
+        return NULL;
+
+    /* Derive a 32-byte key by zero-padding or truncating */
+    memset(aes_key, 0, AES256_KEY_LEN);
+    memcpy(aes_key, key, MIN(keylen, AES256_KEY_LEN));
+
+    if (encode == 1) {
+        iv = (unsigned char *) g_malloc0(AES_IV_LEN);
+        RAND_bytes(iv, AES_IV_LEN);
+    } else {
+        if (plaintext_len <= AES_IV_LEN)
+            return NULL;
+
+        iv = (unsigned char *) g_malloc(AES_IV_LEN);
+        memcpy(iv, plaintext, AES_IV_LEN);
+        plaintext += AES_IV_LEN;
+        plaintext_len -= AES_IV_LEN;
+    }
+
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+    cipher = EVP_CIPHER_fetch(NULL, "AES-256-CBC", NULL);
+#else
+    cipher = (EVP_CIPHER *) EVP_aes_256_cbc();
+#endif
+
+    /* Allocate enough for plaintext + one extra block for padding */
+    output = (unsigned char *) g_malloc0(plaintext_len + AES_IV_LEN + 16);
+
+    if (!(ctx = EVP_CIPHER_CTX_new()))
+        goto err;
+
+    if (!EVP_CipherInit_ex(ctx, cipher, NULL, aes_key, iv, encode))
+        goto err;
+
+    /* Use PKCS#7 padding (default for AES-CBC) */
+
+    if (!EVP_CipherUpdate(ctx, output, &bytes_written, (const unsigned char *) plaintext, plaintext_len))
+        goto err;
+
+    *ciphertext_len = bytes_written;
+
+    if (!EVP_CipherFinal_ex(ctx, output + bytes_written, &final_written))
+        goto err;
+
+    *ciphertext_len += final_written;
+
+    EVP_CIPHER_CTX_free(ctx);
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+    EVP_CIPHER_free(cipher);
+#endif
+    OPENSSL_cleanse(aes_key, AES256_KEY_LEN);
+
+    if (encode == 1) {
+        /* Prepend IV to ciphertext */
+        unsigned char *iv_output = g_malloc0(AES_IV_LEN + *ciphertext_len);
+        memcpy(iv_output, iv, AES_IV_LEN);
+        memcpy(iv_output + AES_IV_LEN, output, *ciphertext_len);
+        *ciphertext_len += AES_IV_LEN;
+        g_free(output);
+        g_free(iv);
+        return (char *) iv_output;
+    } else {
+        g_free(iv);
+        return (char *) output;
+    }
+
+err:
+    EVP_CIPHER_CTX_free(ctx);
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+    EVP_CIPHER_free(cipher);
+#endif
+    OPENSSL_cleanse(aes_key, AES256_KEY_LEN);
+    g_free(output);
+    g_free(iv);
+    return NULL;
+}
+
+/**
  * Return a fish or standard Base64 encoded string with data encrypted
  * is binary safe
  * 
@@ -371,13 +474,18 @@ char *fish_encrypt(const char *key, size_t keylen, const char *message, size_t m
     if (keylen == 0 || message_len == 0)
         return NULL;
 
-    ciphertext = fish_cipher(message, message_len, key, keylen, 1, mode, &ciphertext_len);
+    if (mode == FISH_AES_CBC_MODE) {
+        ciphertext = fish_aes_cipher(message, message_len, key, keylen, 1, &ciphertext_len);
+    } else {
+        ciphertext = fish_cipher(message, message_len, key, keylen, 1, mode, &ciphertext_len);
+    }
 
     if (ciphertext == NULL || ciphertext_len == 0)
         return NULL;
 
     switch (mode) {
         case FISH_CBC_MODE:
+        case FISH_AES_CBC_MODE:
             b64 = g_base64_encode((const unsigned char *) ciphertext, ciphertext_len);
             break;
 
@@ -416,6 +524,7 @@ char *fish_decrypt(const char *key, size_t keylen, const char *data, enum fish_m
 
     switch (mode) {
         case FISH_CBC_MODE:
+        case FISH_AES_CBC_MODE:
             if (strspn(data, base64_chars) != strlen(data))
                 return NULL;
             ciphertext = (char *) g_base64_decode(data, &ciphertext_len);
@@ -428,7 +537,11 @@ char *fish_decrypt(const char *key, size_t keylen, const char *data, enum fish_m
     if (ciphertext == NULL || ciphertext_len == 0)
         return NULL;
 
-    plaintext = fish_cipher(ciphertext, ciphertext_len, key, keylen, 0, mode, final_len);
+    if (mode == FISH_AES_CBC_MODE) {
+        plaintext = fish_aes_cipher(ciphertext, ciphertext_len, key, keylen, 0, final_len);
+    } else {
+        plaintext = fish_cipher(ciphertext, ciphertext_len, key, keylen, 0, mode, final_len);
+    }
     g_free(ciphertext);
 
     if (*final_len == 0)

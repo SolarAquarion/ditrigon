@@ -32,7 +32,8 @@
 
 enum fish_mode {
   FISH_ECB_MODE = 0x1,
-  FISH_CBC_MODE = 0x2
+  FISH_CBC_MODE = 0x2,
+  FISH_AES_CBC_MODE = 0x3
 };
 
 int fish_init(void);

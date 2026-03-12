@@ -36,13 +36,13 @@
 #include "keystore.h"
 #include "irc.h"
 
-static const char *fish_modes[] = {"", "ECB", "CBC", NULL};
+static const char *fish_modes[] = {"", "ECB", "CBC", "AES", NULL};
 
 static const char plugin_name[] = "FiSHLiM";
 static const char plugin_desc[] = "Encryption plugin for the FiSH protocol. Less is More!";
 static const char plugin_version[] = "1.0.0";
 
-static const char usage_setkey[] = "Usage: SETKEY [<nick or #channel>] [<mode>:]<password>, sets the key for a channel or nick. Modes: ECB, CBC";
+static const char usage_setkey[] = "Usage: SETKEY [<nick or #channel>] [<mode>:]<password>, sets the key for a channel or nick. Modes: ECB, CBC, AES";
 static const char usage_delkey[] = "Usage: DELKEY [<nick or #channel>], deletes the key for a channel or nick";
 static const char usage_keyx[] = "Usage: KEYX [<nick>], performs DH1080 key-exchange with <nick>";
 static const char usage_topic[] = "Usage: TOPIC+ <topic>, sets a new encrypted topic for the current channel";
@@ -494,6 +494,9 @@ static int handle_setkey(char *word[], char *word_eol[], void *userdata) {
         mode = FISH_CBC_MODE;
     } else if (g_ascii_strncasecmp("ecb:", key, 4) == 0) {
         key = key+4;
+    } else if (g_ascii_strncasecmp("aes:", key, 4) == 0) {
+        key = key+4;
+        mode = FISH_AES_CBC_MODE;
     }
 
     /* Set password */
