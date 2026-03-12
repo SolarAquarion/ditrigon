@@ -289,6 +289,7 @@ plugin_add (session *sess, char *filename, void *handle, void *init_func,
 		pl->hexchat_emit_print_attrs = hexchat_emit_print_attrs;
 		pl->hexchat_event_attrs_create = hexchat_event_attrs_create;
 		pl->hexchat_event_attrs_free = hexchat_event_attrs_free;
+		pl->hexchat_send_notification = hexchat_send_notification;
 
 		/* run hexchat_plugin_init, if it returns 0, close the plugin */
 		if (((hexchat_init_func *)init_func) (pl, &pl->name, &pl->desc, &pl->version, arg) == 0)
@@ -1997,4 +1998,11 @@ hexchat_pluginpref_list (hexchat_plugin *pl, char* dest)
 	}
 
 	return 1;
+}
+
+void
+hexchat_send_notification (hexchat_plugin *ph, const char *text)
+{
+	(void) ph;
+	fe_toast_send (text);
 }
