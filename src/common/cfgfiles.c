@@ -732,6 +732,7 @@ load_default_config(void)
 	prefs.hex_gui_autoopen_dialog = 1;
 	prefs.hex_gui_autoopen_recv = 1;
 	prefs.hex_gui_autoopen_send = 1;
+	prefs.hex_dcc_strict_ip = 1;
 #ifdef HAVE_GTK_MAC
 	prefs.hex_gui_hide_menu = 1;
 #endif

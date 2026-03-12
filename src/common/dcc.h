@@ -20,6 +20,7 @@
 /* dcc.h */
 
 #include <time.h>						/* for time_t */
+#include <gio/gio.h>
 #include "proto-irc.h"
 
 #ifndef HEXCHAT_DCC_H
@@ -51,6 +52,9 @@ struct DCC
 	guint32 addr;					/* the 32bit IP number, host byte order */
 	int fp;							/* file pointer */
 	int sok;
+	GSocket *gsocket;
+	GInputStream *istream;
+	GOutputStream *ostream;
 	int iotag;						/* reading io tag */
 	int wiotag;						/* writing/sending io tag */
 	int port;
@@ -84,15 +88,6 @@ struct DCC
 										/* the resume point? */
 	unsigned int throttled:2;	/* 0x1 = per send/get throttle
 											0x2 = global throttle */
-};
-
-#define MAX_PROXY_BUFFER 1024
-struct proxy_state
-{
-	int phase;
-	unsigned char buffer[MAX_PROXY_BUFFER];
-	int buffersize;
-	int bufferused;
 };
 
 struct dcc_chat

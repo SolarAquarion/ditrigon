@@ -59,6 +59,8 @@ static int timeout_timer = 0;
 
 static char *dcctypes[] = { "SEND", "RECV", "CHAT", "CHAT" };
 
+#define DCC_USE_PROXY() (prefs.hex_net_proxy_host[0] && prefs.hex_net_proxy_type>0 && prefs.hex_net_proxy_type<5 && prefs.hex_net_proxy_use!=1)
+
 #ifdef O_NOFOLLOW
 #define DCC_OPEN_NOFOLLOW O_NOFOLLOW
 #else
@@ -414,91 +416,8 @@ dcc_check_timeouts (void)
 	return 1;
 }
 
-static int
-dcc_lookup_proxy (char *host, struct sockaddr_in *addr)
-{
-	static char *cache_host = NULL;
-	static guint32 cache_addr;
-
-	/* too lazy to thread this, so we cache results */
-	if (cache_host)
-	{
-		if (strcmp (host, cache_host) == 0)
-		{
-			memcpy (&addr->sin_addr, &cache_addr, 4);
-			return TRUE;
-		}
-		g_free (cache_host);
-		cache_host = NULL;
-	}
-
-	g_autoptr(GResolver) resolver = g_resolver_get_default ();
-	g_autoptr(GError) error = NULL;
-	GList *addresses = g_resolver_lookup_by_name (resolver, host, NULL, &error);
-	if (addresses) {
-		for (GList *l = addresses; l != NULL; l = l->next) {
-			GInetAddress *resolved_addr = G_INET_ADDRESS (l->data);
-			if (g_inet_address_get_family (resolved_addr) == G_SOCKET_FAMILY_IPV4) {
-				const guint8 *bytes = g_inet_address_to_bytes (resolved_addr);
-				memcpy (&addr->sin_addr, bytes, 4);
-				memcpy (&cache_addr, bytes, 4);
-				cache_host = g_strdup (host);
-				g_resolver_free_addresses (addresses);
-				return TRUE;
-			}
-		}
-		g_resolver_free_addresses (addresses);
-	}
-
-	return FALSE;
-}
-
-#define DCC_USE_PROXY() (prefs.hex_net_proxy_host[0] && prefs.hex_net_proxy_type>0 && prefs.hex_net_proxy_type<5 && prefs.hex_net_proxy_use!=1)
-
-static int
-dcc_connect_sok (struct DCC *dcc)
-{
-	g_autoptr(GSocket) socket = NULL;
-	g_autoptr(GInetAddress) iaddr = NULL;
-	g_autoptr(GSocketAddress) saddr = NULL;
-	g_autoptr(GError) error = NULL;
-
-	socket = g_socket_new (G_SOCKET_FAMILY_IPV4, G_SOCKET_TYPE_STREAM, G_SOCKET_PROTOCOL_TCP, &error);
-	if (!socket)
-	{
-		g_warning ("Failed to create DCC socket: %s", error->message);
-		return -1;
-	}
-
-	g_socket_set_blocking (socket, FALSE);
-
-	if (DCC_USE_PROXY ())
-	{
-		struct sockaddr_in addr;
-		if (!dcc_lookup_proxy (prefs.hex_net_proxy_host, &addr))
-			return -1;
-
-		iaddr = g_inet_address_new_from_bytes ((const guint8 *)&addr.sin_addr, G_SOCKET_FAMILY_IPV4);
-		saddr = g_inet_socket_address_new (iaddr, prefs.hex_net_proxy_port);
-	}
-	else
-	{
-		guint32 n_addr = htonl (dcc->addr);
-		iaddr = g_inet_address_new_from_bytes ((const guint8 *)&n_addr, G_SOCKET_FAMILY_IPV4);
-		saddr = g_inet_socket_address_new (iaddr, dcc->port);
-	}
-
-	if (!g_socket_connect (socket, saddr, NULL, &error))
-	{
-		if (!g_error_matches (error, G_IO_ERROR, G_IO_ERROR_PENDING))
-		{
-			g_warning ("Failed to connect DCC socket: %s", error->message);
-			return -1;
-		}
-	}
-
-	return dup (g_socket_get_fd (socket));
-}
+static void dcc_close (struct DCC *dcc, enum dcc_state dccstat, int destroy);
+static int dcc_listen_init (struct DCC *dcc, struct session *sess);
 
 static void
 dcc_close (struct DCC *dcc, enum dcc_state dccstat, int destroy)
@@ -520,6 +439,10 @@ dcc_close (struct DCC *dcc, enum dcc_state dccstat, int destroy)
 		closesocket (dcc->sok);
 		dcc->sok = -1;
 	}
+
+	g_clear_object (&dcc->gsocket);
+	g_clear_object (&dcc->istream);
+	g_clear_object (&dcc->ostream);
 
 	dcc_remove_from_sum (dcc);
 
@@ -706,6 +629,7 @@ dcc_chat_line (struct DCC *dcc, char *line)
 static gboolean
 dcc_read_chat (GIOChannel *source, GIOCondition condition, struct DCC *dcc)
 {
+	g_autoptr(GError) error = NULL;
 	int i, len, dead;
 	char portbuf[32];
 	char lbuf[2050];
@@ -722,19 +646,19 @@ dcc_read_chat (GIOChannel *source, GIOCondition condition, struct DCC *dcc)
 		if (!dcc->iotag)
 			dcc->iotag = fe_input_add (dcc->sok, FIA_READ|FIA_EX, dcc_read_chat, dcc);
 
-		len = recv (dcc->sok, lbuf, sizeof (lbuf) - 2, 0);
+		len = g_pollable_input_stream_read_nonblocking (G_POLLABLE_INPUT_STREAM (dcc->istream), lbuf, sizeof (lbuf) - 2, NULL, &error);
 		if (len < 1)
 		{
 			if (len < 0)
 			{
-				if (would_block ())
+				if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_WOULD_BLOCK))
 					return TRUE;
 			}
 			g_autofree char *ip = net_ip (dcc->addr);
 			g_snprintf (portbuf, sizeof (portbuf), "%d", dcc->port);
 			EMIT_SIGNAL (XP_TE_DCCCHATF, dcc->serv->front_session, dcc->nick,
 							 ip, portbuf,
-							 errorstring ((len < 0) ? sock_error () : 0), 0);
+							 (len < 0) ? error->message : "Connection closed", 0);
 			dcc_close (dcc, STAT_FAILED, FALSE);
 			return TRUE;
 		}
@@ -784,33 +708,17 @@ dcc_calc_average_cps (struct DCC *dcc)
 static gboolean
 dcc_send_ack (struct DCC *dcc)
 {
-	size_t sent = 0;
+	gsize sent = 0;
 	/* send in 32-bit big endian */
 	guint32 pos = htonl (dcc->pos & 0xffffffff);
-	unsigned char *ack = (unsigned char *)&pos;
+	g_autoptr(GError) error = NULL;
 
-	while (sent < sizeof (pos))
+	if (!g_output_stream_write_all (G_OUTPUT_STREAM (dcc->ostream), &pos, sizeof (pos), &sent, NULL, &error))
 	{
-		ssize_t ret = send (dcc->sok, (char *)ack + sent, sizeof (pos) - sent, 0);
-		if (ret < 0)
-		{
-			if (errno == EINTR)
-				continue;
-
-			EMIT_SIGNAL (XP_TE_DCCRECVERR, dcc->serv->front_session, dcc->file,
-							 dcc->destfile, dcc->nick, errorstring (sock_error ()), 0);
-			dcc_close (dcc, STAT_FAILED, FALSE);
-			return FALSE;
-		}
-		if (ret == 0)
-		{
-			EMIT_SIGNAL (XP_TE_DCCRECVERR, dcc->serv->front_session, dcc->file,
-							 dcc->destfile, dcc->nick, errorstring (EIO), 0);
-			dcc_close (dcc, STAT_FAILED, FALSE);
-			return FALSE;
-		}
-
-		sent += (size_t)ret;
+		EMIT_SIGNAL (XP_TE_DCCRECVERR, dcc->serv->front_session, dcc->file,
+						 dcc->destfile, dcc->nick, error->message, 0);
+		dcc_close (dcc, STAT_FAILED, FALSE);
+		return FALSE;
 	}
 
 	return TRUE;
@@ -819,6 +727,7 @@ dcc_send_ack (struct DCC *dcc)
 static gboolean
 dcc_read (GIOChannel *source, GIOCondition condition, struct DCC *dcc)
 {
+	g_autoptr(GError) error = NULL;
 	char *old;
 	char buf[4096];
 	int n;
@@ -891,12 +800,12 @@ dcc_read (GIOChannel *source, GIOCondition condition, struct DCC *dcc)
 		if (!dcc->iotag)
 			dcc->iotag = fe_input_add (dcc->sok, FIA_READ|FIA_EX, dcc_read, dcc);
 
-		n = recv (dcc->sok, buf, sizeof (buf), 0);
+		n = g_pollable_input_stream_read_nonblocking (G_POLLABLE_INPUT_STREAM (dcc->istream), buf, sizeof (buf), NULL, &error);
 		if (n < 1)
 		{
 			if (n < 0)
 			{
-				if (would_block ())
+				if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_WOULD_BLOCK))
 				{
 					if (need_ack && !dcc_send_ack (dcc))
 						return TRUE;
@@ -905,10 +814,8 @@ dcc_read (GIOChannel *source, GIOCondition condition, struct DCC *dcc)
 			}
 			EMIT_SIGNAL (XP_TE_DCCRECVERR, dcc->serv->front_session, dcc->file,
 							 dcc->destfile, dcc->nick,
-							 errorstring ((n < 0) ? sock_error () : 0), 0);
+							 (n < 0) ? error->message : "Connection closed", 0);
 			/* send ack here? but the socket is dead */
-			/*if (need_ack)
-				dcc_send_ack (dcc);*/
 			dcc_close (dcc, STAT_FAILED, FALSE);
 			return TRUE;
 		}
@@ -952,30 +859,24 @@ dcc_open_query (server *serv, char *nick)
 static gboolean
 dcc_did_connect (GIOChannel *source, GIOCondition condition, struct DCC *dcc)
 {
-	int er;
-	
-	struct sockaddr_in addr;
+	g_autoptr(GError) error = NULL;
+	GSocketConnection *conn;
 
-	memset (&addr, 0, sizeof (addr));
-	addr.sin_port = htons (dcc->port);
-	addr.sin_family = AF_INET;
-	addr.sin_addr.s_addr = htonl (dcc->addr);
-
-	/* check if it's already connected; This always fails on winXP */
-	if (connect (dcc->sok, (struct sockaddr *) &addr, sizeof (addr)) != 0)
+	if (!g_socket_check_connect_result (dcc->gsocket, &error))
 	{
-		er = sock_error ();
-		if (er != EISCONN)
-		{
-			EMIT_SIGNAL (XP_TE_DCCCONFAIL, dcc->serv->front_session,
-							 dcctypes[dcc->type], dcc->nick, errorstring (er),
-							 NULL, 0);
-			dcc->dccstat = STAT_FAILED;
-			fe_dcc_update (dcc);
-			return FALSE;
-		}
+		EMIT_SIGNAL (XP_TE_DCCCONFAIL, dcc->serv->front_session,
+						 dcctypes[dcc->type], dcc->nick, error->message,
+						 NULL, 0);
+		dcc->dccstat = STAT_FAILED;
+		fe_dcc_update (dcc);
+		return FALSE;
 	}
-	
+
+	conn = g_socket_connection_factory_create_connection (dcc->gsocket);
+	dcc->istream = g_object_ref (g_io_stream_get_input_stream (G_IO_STREAM (conn)));
+	dcc->ostream = g_object_ref (g_io_stream_get_output_stream (G_IO_STREAM (conn)));
+	g_object_unref (conn);
+
 	return TRUE;
 }
 
@@ -1030,517 +931,90 @@ dcc_connect_finished (GIOChannel *source, GIOCondition condition, struct DCC *dc
 	return TRUE;
 }
 
-static gboolean
-read_proxy (struct DCC *dcc)
+static GProxyResolver *
+dcc_get_proxy_resolver (void)
 {
-	struct proxy_state *proxy = dcc->proxy;
-	while (proxy->bufferused < proxy->buffersize)
-	{
-		int ret = recv (dcc->sok, &proxy->buffer[proxy->bufferused],
-						proxy->buffersize - proxy->bufferused, 0);
-		if (ret > 0)
-			proxy->bufferused += ret;
-		else
-		{
-			if (would_block ())
-				return FALSE;
-			else
-			{
-				dcc->dccstat = STAT_FAILED;
-				fe_dcc_update (dcc);
-				if (dcc->iotag)
-				{
-					fe_input_remove (dcc->iotag);
-					dcc->iotag = 0;
-				}
-				return FALSE;
-			}
-		}
-	}
-	return TRUE;
-}
+	const char *protocol = NULL;
+	g_autofree char *uri = NULL;
 
-static gboolean
-write_proxy (struct DCC *dcc)
-{
-	struct proxy_state *proxy = dcc->proxy;
-	while (proxy->bufferused < proxy->buffersize)
-	{
-		int ret = send (dcc->sok, &proxy->buffer[proxy->bufferused],
-						proxy->buffersize - proxy->bufferused, 0);
-		if (ret >= 0)
-			proxy->bufferused += ret;
-		else
-		{
-			if (would_block ())
-				return FALSE;
-			else
-			{
-				dcc->dccstat = STAT_FAILED;
-				fe_dcc_update (dcc);
-				if (dcc->wiotag)
-				{
-					fe_input_remove (dcc->wiotag);
-					dcc->wiotag = 0;
-				}
-				return FALSE;
-			}
-		}
-	}
-	return TRUE;
-}
-
-static gboolean
-proxy_read_line (struct DCC *dcc)
-{
-	struct proxy_state *proxy = dcc->proxy;
-	while (1)
-	{
-		proxy->buffersize = proxy->bufferused + 1;
-		if (!read_proxy (dcc))
-			return FALSE;
-		if (proxy->buffer[proxy->bufferused - 1] == '\n'
-			|| proxy->bufferused == MAX_PROXY_BUFFER)
-		{
-			proxy->buffer[proxy->bufferused - 1] = 0;
-			return TRUE;
-		}
-	}
-}
-
-static gboolean
-dcc_wingate_proxy_traverse (GIOChannel *source, GIOCondition condition, struct DCC *dcc)
-{
-	struct proxy_state *proxy = dcc->proxy;
-	if (proxy->phase == 0)
-	{
-		g_autofree char *ip = net_ip(dcc->addr);
-		proxy->buffersize = g_snprintf ((char*) proxy->buffer, MAX_PROXY_BUFFER,
-										"%s %d\r\n", ip,
-										dcc->port);
-		proxy->bufferused = 0;
-		dcc->wiotag = fe_input_add (dcc->sok, FIA_WRITE|FIA_EX,
-									dcc_wingate_proxy_traverse, dcc);
-		++proxy->phase;
-	}
-	if (proxy->phase == 1)
-	{
-		if (!read_proxy (dcc))
-			return TRUE;
-		fe_input_remove (dcc->wiotag);
-		dcc->wiotag = 0;
-		dcc_connect_finished (source, 0, dcc);
-	}
-	return TRUE;
-}
-
-struct sock_connect
-{
-	char version;
-	char type;
-	guint16 port;
-	guint32 address;
-	char username[10];
-};
-static gboolean
-dcc_socks_proxy_traverse (GIOChannel *source, GIOCondition condition, struct DCC *dcc)
-{
-	struct proxy_state *proxy = dcc->proxy;
-
-	if (proxy->phase == 0)
-	{
-		struct sock_connect sc;
-		sc.version = 4;
-		sc.type = 1;
-		sc.port = htons (dcc->port);
-		sc.address = htonl (dcc->addr);
-		g_strlcpy (sc.username, prefs.hex_irc_user_name, sizeof (sc.username));
-		memcpy (proxy->buffer, &sc, sizeof (sc));
-		proxy->buffersize = 8 + strlen (sc.username) + 1;
-		proxy->bufferused = 0;
-		dcc->wiotag = fe_input_add (dcc->sok, FIA_WRITE|FIA_EX,
-									dcc_socks_proxy_traverse, dcc);
-		++proxy->phase;
-	}
-
-	if (proxy->phase == 1)
-	{
-		if (!write_proxy (dcc))
-			return TRUE;
-		fe_input_remove (dcc->wiotag);
-		dcc->wiotag = 0;
-		proxy->bufferused = 0;
-		proxy->buffersize = 8;
-		dcc->iotag = fe_input_add (dcc->sok, FIA_READ|FIA_EX,
-									dcc_socks_proxy_traverse, dcc);
-		++proxy->phase;
-	}
-
-	if (proxy->phase == 2)
-	{
-		if (!read_proxy (dcc))
-			return TRUE;
-		fe_input_remove (dcc->iotag);
-		dcc->iotag = 0;
-		if (proxy->buffer[1] == 90)
-			dcc_connect_finished (source, 0, dcc);
-		else
-		{
-			dcc->dccstat = STAT_FAILED;
-			fe_dcc_update (dcc);
-		}
-	}
-
-	return TRUE;
-}
-
-struct sock5_connect1
-{
-        char version;
-        char nmethods;
-        char method;
-};
-static gboolean
-dcc_socks5_proxy_traverse (GIOChannel *source, GIOCondition condition, struct DCC *dcc)
-{
-	struct proxy_state *proxy = dcc->proxy;
-	int auth = prefs.hex_net_proxy_auth && prefs.hex_net_proxy_user[0] && prefs.hex_net_proxy_pass[0];
-
-	if (proxy->phase == 0)
-	{
-		struct sock5_connect1 sc1;
-
-		sc1.version = 5;
-		sc1.nmethods = 1;
-		sc1.method = 0;
-		if (auth)
-			sc1.method = 2;
-		memcpy (proxy->buffer, &sc1, 3);
-		proxy->buffersize = 3;
-		proxy->bufferused = 0;
-		dcc->wiotag = fe_input_add (dcc->sok, FIA_WRITE|FIA_EX,
-									dcc_socks5_proxy_traverse, dcc);
-		++proxy->phase;
-	}
-
-	if (proxy->phase == 1)
-	{
-		if (!write_proxy (dcc))
-			return TRUE;
-		fe_input_remove (dcc->wiotag);
-		dcc->wiotag = 0;
-		proxy->bufferused = 0;
-		proxy->buffersize = 2;
-		dcc->iotag = fe_input_add (dcc->sok, FIA_READ|FIA_EX,
-									dcc_socks5_proxy_traverse, dcc);
-		++proxy->phase;
-	}
-
-	if (proxy->phase == 2)
-	{
-		if (!read_proxy (dcc))
-			return TRUE;
-		fe_input_remove (dcc->iotag);
-		dcc->iotag = 0;
-
-		/* did the server say no auth required? */
-		if (proxy->buffer[0] == 5 && proxy->buffer[1] == 0)
-			auth = 0;
-
-		/* Set up authentication I/O */
-		if (auth)
-		{
-			int len_u=0, len_p=0;
-
-			/* authentication sub-negotiation (RFC1929) */
-			if ( proxy->buffer[0] != 5 || proxy->buffer[1] != 2 )  /* UPA not supported by server */
-			{
-				PrintText (dcc->serv->front_session, "SOCKS\tServer doesn't support UPA authentication.\n");
-				dcc->dccstat = STAT_FAILED;
-				fe_dcc_update (dcc);
-				return TRUE;
-			}
-
-			memset (proxy->buffer, 0, MAX_PROXY_BUFFER);
-
-			/* form the UPA request */
-			len_u = strlen (prefs.hex_net_proxy_user);
-			len_p = strlen (prefs.hex_net_proxy_pass);
-			proxy->buffer[0] = 1;
-			proxy->buffer[1] = len_u;
-			memcpy (proxy->buffer + 2, prefs.hex_net_proxy_user, len_u);
-			proxy->buffer[2 + len_u] = len_p;
-			memcpy (proxy->buffer + 3 + len_u, prefs.hex_net_proxy_pass, len_p);
-
-			proxy->buffersize = 3 + len_u + len_p;
-			proxy->bufferused = 0;
-			dcc->wiotag = fe_input_add (dcc->sok, FIA_WRITE|FIA_EX,
-										dcc_socks5_proxy_traverse, dcc);
-			++proxy->phase;
-		}
-		else
-		{
-			if (proxy->buffer[0] != 5 || proxy->buffer[1] != 0)
-			{
-				PrintText (dcc->serv->front_session, "SOCKS\tAuthentication required but disabled in settings.\n");
-				dcc->dccstat = STAT_FAILED;
-				fe_dcc_update (dcc);
-				return TRUE;
-			}
-			proxy->phase += 2;
-		}
-	}
-	
-	if (proxy->phase == 3)
-	{
-		if (!write_proxy (dcc))
-			return TRUE;
-		fe_input_remove (dcc->wiotag);
-		dcc->wiotag = 0;
-		proxy->buffersize = 2;
-		proxy->bufferused = 0;
-		dcc->iotag = fe_input_add (dcc->sok, FIA_READ|FIA_EX,
-									dcc_socks5_proxy_traverse, dcc);
-		++proxy->phase;
-	}
-
-	if (proxy->phase == 4)
-	{
-		if (!read_proxy (dcc))
-			return TRUE;
-		if (dcc->iotag)
-		{
-			fe_input_remove (dcc->iotag);
-			dcc->iotag = 0;
-		}
-		if (proxy->buffer[1] != 0)
-		{
-			PrintText (dcc->serv->front_session, "SOCKS\tAuthentication failed. "
-							 "Is username and password correct?\n");
-			dcc->dccstat = STAT_FAILED;
-			fe_dcc_update (dcc);
-			return TRUE;
-		}
-		++proxy->phase;
-	}
-
-	if (proxy->phase == 5)
-	{
-		proxy->buffer[0] = 5;	/* version (socks 5) */
-		proxy->buffer[1] = 1;	/* command (connect) */
-		proxy->buffer[2] = 0;	/* reserved */
-		proxy->buffer[3] = 1;	/* address type (IPv4) */
-		proxy->buffer[4] = (dcc->addr >> 24) & 0xFF;	/* IP address */
-		proxy->buffer[5] = (dcc->addr >> 16) & 0xFF;
-		proxy->buffer[6] = (dcc->addr >> 8) & 0xFF;
-		proxy->buffer[7] = (dcc->addr & 0xFF);
-		proxy->buffer[8] = (dcc->port >> 8) & 0xFF;		/* port */
-		proxy->buffer[9] = (dcc->port & 0xFF);
-		proxy->buffersize = 10;
-		proxy->bufferused = 0;
-		dcc->wiotag = fe_input_add (dcc->sok, FIA_WRITE|FIA_EX,
-									dcc_socks5_proxy_traverse, dcc);
-		++proxy->phase;
-	}
-
-	if (proxy->phase == 6)
-	{
-		if (!write_proxy (dcc))
-			return TRUE;
-		fe_input_remove (dcc->wiotag);
-		dcc->wiotag = 0;
-		proxy->buffersize = 4;
-		proxy->bufferused = 0;
-		dcc->iotag = fe_input_add (dcc->sok, FIA_READ|FIA_EX,
-									dcc_socks5_proxy_traverse, dcc);
-		++proxy->phase;
-	}
-
-	if (proxy->phase == 7)
-	{
-		if (!read_proxy (dcc))
-			return TRUE;
-		if (proxy->buffer[0] != 5 || proxy->buffer[1] != 0)
-		{
-			fe_input_remove (dcc->iotag);
-			dcc->iotag = 0;
-			if (proxy->buffer[1] == 2)
-				PrintText (dcc->serv->front_session, "SOCKS\tProxy refused to connect to host (not allowed).\n");
-			else
-				PrintTextf (dcc->serv->front_session, "SOCKS\tProxy failed to connect to host (error %d).\n", proxy->buffer[1]);
-			dcc->dccstat = STAT_FAILED;
-			fe_dcc_update (dcc);
-			return TRUE;
-		}
-		switch (proxy->buffer[3])
-		{
-			case 1: proxy->buffersize += 6; break;
-			case 3: proxy->buffersize += 1; break;
-			case 4: proxy->buffersize += 18; break;
-		};
-		++proxy->phase;
-	}
-
-	if (proxy->phase == 8)
-	{
-		if (!read_proxy (dcc))
-			return TRUE;
-		/* handle domain name case */
-		if (proxy->buffer[3] == 3)
-		{
-			proxy->buffersize = 5 + proxy->buffer[4] + 2;
-		}
-		/* everything done? */
-		if (proxy->bufferused == proxy->buffersize)
-		{
-			fe_input_remove (dcc->iotag);
-			dcc->iotag = 0;
-			dcc_connect_finished (source, 0, dcc);
-		}
-	}
-	return TRUE;
-}
-
-static gboolean
-dcc_http_proxy_traverse (GIOChannel *source, GIOCondition condition, struct DCC *dcc)
-{
-	struct proxy_state *proxy = dcc->proxy;
-
-	if (proxy->phase == 0)
-	{
-		g_autofree char *auth_data = NULL;
-		g_autofree char *auth_plain = NULL;
-		g_autofree char *connect_req = NULL;
-		gsize request_len;
-
-		if (prefs.hex_net_proxy_auth)
-		{
-			auth_plain = g_strdup_printf ("%s:%s",
-							 prefs.hex_net_proxy_user, prefs.hex_net_proxy_pass);
-			auth_data = g_base64_encode ((const guchar *) auth_plain, strlen (auth_plain));
-			g_autofree char *ip = net_ip (dcc->addr);
-			connect_req = g_strdup_printf ("CONNECT %s:%d HTTP/1.0\r\n"
-								   "Proxy-Authorization: Basic %s\r\n"
-								   "\r\n",
-								   ip, dcc->port, auth_data);
-		}
-		else
-		{
-			g_autofree char *ip = net_ip (dcc->addr);
-			connect_req = g_strdup_printf ("CONNECT %s:%d HTTP/1.0\r\n\r\n",
-								   ip, dcc->port);
-		}
-
-		if (connect_req == NULL)
-		{
-			PrintText (dcc->serv->front_session, "HTTP\tFailed to create proxy request.\n");
-			dcc->dccstat = STAT_FAILED;
-			fe_dcc_update (dcc);
-			return TRUE;
-		}
-
-		request_len = strlen (connect_req);
-		if (request_len >= MAX_PROXY_BUFFER)
-		{
-			PrintText (dcc->serv->front_session, "HTTP\tProxy request is too long.\n");
-			dcc->dccstat = STAT_FAILED;
-			fe_dcc_update (dcc);
-			return TRUE;
-		}
-
-		proxy->bufferused = 0;
-		proxy->buffersize = (int) request_len;
-		memcpy (proxy->buffer, connect_req, request_len);
-		dcc->wiotag = fe_input_add (dcc->sok, FIA_WRITE|FIA_EX,
-									dcc_http_proxy_traverse, dcc);
-		++proxy->phase;
-	}
-
-	if (proxy->phase == 1)
-	{
-		if (!write_proxy (dcc))
-			return TRUE;
-		fe_input_remove (dcc->wiotag);
-		dcc->wiotag = 0;
-		proxy->bufferused = 0;
-		dcc->iotag = fe_input_add (dcc->sok, FIA_READ|FIA_EX,
-										dcc_http_proxy_traverse, dcc);
-		++proxy->phase;
-	}
-
-	if (proxy->phase == 2)
-	{
-		if (!proxy_read_line (dcc))
-			return TRUE;
-		/* "HTTP/1.0 200 OK" */
-		if (proxy->bufferused < 12 ||
-			 memcmp (proxy->buffer, "HTTP/", 5) || memcmp (proxy->buffer + 9, "200", 3))
-		{
-			fe_input_remove (dcc->iotag);
-			dcc->iotag = 0;
-			PrintText (dcc->serv->front_session, proxy->buffer);
-			dcc->dccstat = STAT_FAILED;
-			fe_dcc_update (dcc);
-			return TRUE;
-		}
-		proxy->bufferused = 0;
-		++proxy->phase;
-	}
-
-	if (proxy->phase == 3)
-	{
-		while (1)
-		{
-			/* read until blank line */
-			if (proxy_read_line (dcc))
-			{
-				if (proxy->bufferused < 1 ||
-					(proxy->bufferused == 2 && proxy->buffer[0] == '\r'))
-				{
-					break;
-				}
-				if (proxy->bufferused > 1)
-					PrintText (dcc->serv->front_session, proxy->buffer);
-				proxy->bufferused = 0;
-			}
-			else
-				return TRUE;
-		}
-		fe_input_remove (dcc->iotag);
-		dcc->iotag = 0;
-		dcc_connect_finished (source, 0, dcc);
-	}
-
-	return TRUE;
-}
-
-static gboolean
-dcc_proxy_connect (GIOChannel *source, GIOCondition condition, struct DCC *dcc)
-{
-	fe_input_remove (dcc->iotag);
-	dcc->iotag = 0;
-
-	if (!dcc_did_connect (source, condition, dcc))
-		return TRUE;
-
-	dcc->proxy = g_new0 (struct proxy_state, 1);
+	if (!DCC_USE_PROXY ())
+		return NULL;
 
 	switch (prefs.hex_net_proxy_type)
 	{
-		case 1: return dcc_wingate_proxy_traverse (source, condition, dcc);
-		case 2: return dcc_socks_proxy_traverse (source, condition, dcc);
-		case 3: return dcc_socks5_proxy_traverse (source, condition, dcc);
-		case 4: return dcc_http_proxy_traverse (source, condition, dcc);
+	case 2: protocol = "socks4"; break;
+	case 3: protocol = "socks5"; break;
+	case 4: protocol = "http"; break;
+	default: return NULL;
 	}
-	return TRUE;
+
+	uri = g_strdup_printf ("%s://%s:%d", protocol, prefs.hex_net_proxy_host, prefs.hex_net_proxy_port);
+	return g_simple_proxy_resolver_new (uri, NULL);
 }
 
-static int dcc_listen_init (struct DCC *, struct session *);
+static void
+dcc_on_connect_async (GObject *source, GAsyncResult *res, gpointer user_data)
+{
+	struct DCC *dcc = user_data;
+	GSocketConnection *conn;
+	g_autoptr(GError) error = NULL;
+	char host[128];
+
+	conn = g_socket_client_connect_finish (G_SOCKET_CLIENT (source), res, &error);
+	if (!conn)
+	{
+		EMIT_SIGNAL (XP_TE_DCCCONFAIL, dcc->serv->front_session,
+						 dcctypes[dcc->type], dcc->nick, error->message,
+						 NULL, 0);
+		dcc->dccstat = STAT_FAILED;
+		fe_dcc_update (dcc);
+		return;
+	}
+
+	dcc->gsocket = g_object_ref (g_socket_connection_get_socket (conn));
+	dcc->sok = dup (g_socket_get_fd (dcc->gsocket));
+	dcc->istream = g_object_ref (g_io_stream_get_input_stream (G_IO_STREAM (conn)));
+	dcc->ostream = g_object_ref (g_io_stream_get_output_stream (G_IO_STREAM (conn)));
+	g_object_unref (conn);
+
+	dcc->dccstat = STAT_ACTIVE;
+	g_autofree char *ip = net_ip (dcc->addr);
+	g_snprintf (host, sizeof host, "%s:%d", ip, dcc->port);
+
+	switch (dcc->type)
+	{
+	case TYPE_RECV:
+		dcc->iotag = fe_input_add (dcc->sok, FIA_READ|FIA_EX, dcc_read, dcc);
+		EMIT_SIGNAL (XP_TE_DCCCONRECV, dcc->serv->front_session,
+						 dcc->nick, host, dcc->file, NULL, 0);
+		break;
+	case TYPE_SEND:
+		/* passive send */
+		dcc->fastsend = prefs.hex_dcc_fast_send;
+		if (dcc->fastsend)
+			dcc->wiotag = fe_input_add (dcc->sok, FIA_WRITE, dcc_send_data, dcc);
+		dcc->iotag = fe_input_add (dcc->sok, FIA_READ|FIA_EX, dcc_read_ack, dcc);
+		dcc_send_data (NULL, 0, (gpointer)dcc);
+		EMIT_SIGNAL (XP_TE_DCCCONSEND, dcc->serv->front_session,
+						 dcc->nick, host, dcc->file, NULL, 0);
+		break;
+	case TYPE_CHATRECV:
+		dcc_open_query (dcc->serv, dcc->nick);
+		dcc->iotag = fe_input_add (dcc->sok, FIA_READ|FIA_EX, dcc_read_chat, dcc);
+		dcc->dccchat = g_new0 (struct dcc_chat, 1);
+		EMIT_SIGNAL (XP_TE_DCCCONCHAT, dcc->serv->front_session,
+						 dcc->nick, host, NULL, NULL, 0);
+		break;
+	default:
+		break;
+	}
+
+	fe_dcc_update (dcc);
+}
 
 static void
 dcc_connect (struct DCC *dcc)
 {
-	int ret;
 	char tbuf[400];
 
 	if (dcc->dccstat == STAT_CONNECTING)
@@ -1550,8 +1024,7 @@ dcc_connect (struct DCC *dcc)
 	if (dcc->pasvid && dcc->port == 0)
 	{
 		/* accepted a passive dcc send */
-		ret = dcc_listen_init (dcc, dcc->serv->front_session);
-		if (!ret)
+		if (!dcc_listen_init (dcc, dcc->serv->front_session))
 		{
 			dcc_close (dcc, STAT_FAILED, FALSE);
 			return;
@@ -1569,27 +1042,26 @@ dcc_connect (struct DCC *dcc)
 	}
 	else
 	{
-		dcc->sok = dcc_connect_sok (dcc);
-		if (dcc->sok == -1)
-		{
-			dcc->dccstat = STAT_FAILED;
-			fe_dcc_update (dcc);
-			return;
-		}
-		if (DCC_USE_PROXY ())
-			dcc->iotag = fe_input_add (dcc->sok, FIA_WRITE|FIA_EX, dcc_proxy_connect, dcc);
-		else
-			dcc->iotag = fe_input_add (dcc->sok, FIA_WRITE|FIA_EX, dcc_connect_finished, dcc);
+		g_autoptr(GSocketClient) client = g_socket_client_new ();
+		g_autoptr(GProxyResolver) resolver = dcc_get_proxy_resolver ();
+		g_autoptr(GInetAddress) iaddr = g_inet_address_new_from_bytes ((const guint8 *)&(guint32){htonl(dcc->addr)}, G_SOCKET_FAMILY_IPV4);
+		g_autoptr(GSocketAddress) saddr = g_inet_socket_address_new (iaddr, dcc->port);
+
+		if (resolver)
+			g_socket_client_set_proxy_resolver (client, resolver);
+
+		g_socket_client_connect_async (client, G_SOCKET_CONNECTABLE (saddr), NULL, dcc_on_connect_async, dcc);
 	}
-	
+
 	fe_dcc_update (dcc);
 }
 
 static gboolean
 dcc_send_data (GIOChannel *source, GIOCondition condition, struct DCC *dcc)
 {
+	g_autoptr(GError) error = NULL;
 	char *buf;
-	int len, sent, sok = dcc->sok, err = 0;
+	int len, sent, err = 0;
 
 	if (prefs.hex_dcc_blocksize < 1) /* this is too little! */
 		prefs.hex_dcc_blocksize = 1024;
@@ -1610,7 +1082,7 @@ dcc_send_data (GIOChannel *source, GIOCondition condition, struct DCC *dcc)
 			return TRUE;
 	}
 	else if (!dcc->wiotag)
-		dcc->wiotag = fe_input_add (sok, FIA_WRITE, dcc_send_data, dcc);
+		dcc->wiotag = fe_input_add (dcc->sok, FIA_WRITE, dcc_send_data, dcc);
 
 	buf = g_malloc (prefs.hex_dcc_blocksize);
 
@@ -1632,16 +1104,25 @@ dcc_send_data (GIOChannel *source, GIOCondition condition, struct DCC *dcc)
 		goto abortit;
 	}
 
-	sent = send (sok, buf, len, 0);
+	sent = g_pollable_output_stream_write_nonblocking (G_POLLABLE_OUTPUT_STREAM (dcc->ostream), buf, len, NULL, &error);
 
 	if (sent < 0)
 	{
-		if (would_block ())
+		if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_WOULD_BLOCK))
 		{
 			g_free (buf);
 			return TRUE;
 		}
-		err = sock_error ();
+		err = EIO; // Fallback for signals if error is NULL, but unlikely with GIO
+		if (error)
+		{
+			g_free (buf);
+			EMIT_SIGNAL (XP_TE_DCCSENDFAIL, dcc->serv->front_session,
+							 file_part (dcc->file), dcc->nick,
+							 error->message, NULL, 0);
+			dcc_close (dcc, STAT_FAILED, FALSE);
+			return TRUE;
+		}
 		goto abortit;
 	}
 	if (sent == 0)
@@ -1763,12 +1244,12 @@ static gboolean
 dcc_accept (GIOChannel *source, GIOCondition condition, struct DCC *dcc)
 {
 	char host[128];
-	struct sockaddr_in CAddr;
 	dcc_peer_addr_state peer_addr_state = DCC_PEER_ADDR_MISSING;
 	guint32 expected_addr = 0;
 	gboolean enforce_peer_addr = FALSE;
-	int sok;
-	socklen_t len;
+	g_autoptr(GSocket) new_gsocket = NULL;
+	g_autoptr(GError) error = NULL;
+	guint32 addr_h = 0;
 
 	if (!dcc->pasvid && (dcc->type == TYPE_SEND || dcc->type == TYPE_CHATSEND))
 	{
@@ -1788,11 +1269,10 @@ dcc_accept (GIOChannel *source, GIOCondition condition, struct DCC *dcc)
 
 	while (1)
 	{
-		len = sizeof (CAddr);
-		sok = accept (dcc->sok, (struct sockaddr *) &CAddr, &len);
-		if (sok < 0)
+		new_gsocket = g_socket_accept (dcc->gsocket, NULL, &error);
+		if (!new_gsocket)
 		{
-			if (would_block ())
+			if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_WOULD_BLOCK))
 				return TRUE;
 
 			fe_input_remove (dcc->iotag);
@@ -1803,17 +1283,31 @@ dcc_accept (GIOChannel *source, GIOCondition condition, struct DCC *dcc)
 			return TRUE;
 		}
 
-		if (enforce_peer_addr && ntohl (CAddr.sin_addr.s_addr) != expected_addr)
+		g_autoptr(GSocketAddress) remote_addr = g_socket_get_remote_address (new_gsocket, &error);
+		if (!remote_addr)
+		{
+			g_clear_error (&error);
+			g_clear_object (&new_gsocket);
+			continue;
+		}
+
+		GInetAddress *inet_addr = g_inet_socket_address_get_address (G_INET_SOCKET_ADDRESS (remote_addr));
+		const guint8 *bytes = g_inet_address_to_bytes (inet_addr);
+		guint32 addr_n;
+		memcpy (&addr_n, bytes, 4);
+		addr_h = ntohl (addr_n);
+
+		if (enforce_peer_addr && addr_h != expected_addr)
 		{
 			if (prefs.hex_dcc_strict_ip)
 			{
-				closesocket (sok);
+				g_clear_object (&new_gsocket);
 				continue;
 			}
 			else
 			{
 				g_autofree char *expected_ip = net_ip(expected_addr);
-				g_autofree char *got_ip = net_ip(ntohl(CAddr.sin_addr.s_addr));
+				g_autofree char *got_ip = net_ip(addr_h);
 				PrintTextf (dcc->serv->front_session, "DCC peer IP mismatch: Expected %s, got %s. Continuing because hex_dcc_strict_ip is disabled.\n",
 							expected_ip, got_ip);
 			}
@@ -1826,18 +1320,17 @@ dcc_accept (GIOChannel *source, GIOCondition condition, struct DCC *dcc)
 	dcc->iotag = 0;
 	closesocket (dcc->sok);
 	dcc->sok = -1;
+	g_clear_object (&dcc->gsocket);
 
-	if (set_nonblocking (sok) == -1)
-	{
-		PrintTextf (dcc->serv->front_session,
-					 "Failed to set DCC socket nonblocking mode (%s).\n",
-					 errorstring (errno));
-		closesocket (sok);
-		dcc_close (dcc, STAT_FAILED, FALSE);
-		return TRUE;
-	}
-	dcc->sok = sok;
-	dcc->addr = ntohl (CAddr.sin_addr.s_addr);
+	g_socket_set_blocking (new_gsocket, FALSE);
+	dcc->gsocket = g_steal_pointer (&new_gsocket);
+	dcc->sok = dup (g_socket_get_fd (dcc->gsocket));
+	dcc->addr = addr_h;
+
+	GSocketConnection *conn = g_socket_connection_factory_create_connection (dcc->gsocket);
+	dcc->istream = g_object_ref (g_io_stream_get_input_stream (G_IO_STREAM (conn)));
+	dcc->ostream = g_object_ref (g_io_stream_get_output_stream (G_IO_STREAM (conn)));
+	g_object_unref (conn);
 
 	if (dcc->pasvid)
 		return dcc_connect_finished (NULL, 0, dcc);
@@ -1853,8 +1346,8 @@ dcc_accept (GIOChannel *source, GIOCondition condition, struct DCC *dcc)
 	{
 	case TYPE_SEND:
 		if (dcc->fastsend)
-			dcc->wiotag = fe_input_add (sok, FIA_WRITE, dcc_send_data, dcc);
-		dcc->iotag = fe_input_add (sok, FIA_READ|FIA_EX, dcc_read_ack, dcc);
+			dcc->wiotag = fe_input_add (dcc->sok, FIA_WRITE, dcc_send_data, dcc);
+		dcc->iotag = fe_input_add (dcc->sok, FIA_READ|FIA_EX, dcc_read_ack, dcc);
 		dcc_send_data (NULL, 0, (gpointer)dcc);
 		EMIT_SIGNAL (XP_TE_DCCCONSEND, dcc->serv->front_session,
 						 dcc->nick, host, dcc->file, NULL, 0);
@@ -1994,7 +1487,8 @@ dcc_listen_init (struct DCC *dcc, session *sess)
 	}
 
 	g_socket_set_blocking (socket, FALSE);
-	dcc->sok = dup (g_socket_get_fd (socket));
+	dcc->gsocket = g_steal_pointer (&socket);
+	dcc->sok = dup (g_socket_get_fd (dcc->gsocket));
 	dcc->iotag = fe_input_add (dcc->sok, FIA_READ|FIA_EX, dcc_accept, dcc);
 
 	return TRUE;
