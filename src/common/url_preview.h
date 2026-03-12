@@ -1,7 +1,6 @@
 #ifndef HEXCHAT_URL_PREVIEW_H
 #define HEXCHAT_URL_PREVIEW_H
 
-#include <glib.h>
 #include "hexchat.h"
 
 typedef struct {
