@@ -52,26 +52,16 @@ static char err_buf[256];			/* generic error buffer */
 /* +++++ Internal functions +++++ */
 
 static void
-__SSL_fill_err_buf (char *funcname)
+__SSL_fill_err_buf (const char *funcname)
 {
 	int err;
 	char buf[256];
 
-
 	err = ERR_get_error ();
 	ERR_error_string (err, buf);
-	g_snprintf (err_buf, sizeof (err_buf), "%s: %s (%d)\n", funcname, buf, err);
+	g_snprintf (err_buf, sizeof (err_buf), "%s: %s (%d)", funcname, buf, err);
 }
 
-
-static void
-__SSL_critical_error (char *funcname)
-{
-	__SSL_fill_err_buf (funcname);
-	fprintf (stderr, "%s\n", err_buf);
-
-	exit (1);
-}
 
 /* +++++ SSL functions +++++ */
 
@@ -153,7 +143,7 @@ _SSL_get_cert_info (struct cert_info *cert_info, SSL * ssl)
 	int sign_alg;
 
 
-	if (!(peer_cert = SSL_get_peer_certificate (ssl)))
+	if (!(peer_cert = SSL_get1_peer_certificate (ssl)))
 		return (1);				  /* FATAL? */
 
 	X509_NAME_oneline (X509_get_subject_name (peer_cert), cert_info->subject,
@@ -168,11 +158,7 @@ _SSL_get_cert_info (struct cert_info *cert_info, SSL * ssl)
 		return 1;
 
 	alg = OBJ_obj2nid (algor->algorithm);
-#ifndef HAVE_X509_GET_SIGNATURE_NID
-	sign_alg = OBJ_obj2nid (peer_cert->sig_alg->algorithm);
-#else
 	sign_alg = X509_get_signature_nid (peer_cert);
-#endif
 	ASN1_TIME_snprintf (notBefore, sizeof (notBefore),
 							  X509_get_notBefore (peer_cert));
 	ASN1_TIME_snprintf (notAfter, sizeof (notAfter),
@@ -243,14 +229,12 @@ _SSL_send (SSL * ssl, char *buf, int len)
 	case SSL_ERROR_WANT_WRITE:
 		errno = EAGAIN;
 		break;
-	case SSL_ERROR_SSL:			  /* setup errno! */
-		/* ??? */
+	case SSL_ERROR_SSL:
 		__SSL_fill_err_buf ("SSL_write");
-		fprintf (stderr, "%s\n", err_buf);
+		g_warning ("%s", err_buf);
 		break;
 	case SSL_ERROR_SYSCALL:
-		/* ??? */
-		perror ("SSL_write/write");
+		g_warning ("SSL_write/write: %s", g_strerror (errno));
 		break;
 	case SSL_ERROR_ZERO_RETURN:
 		/* fprintf(stderr, "SSL closed on write\n"); */
@@ -276,14 +260,12 @@ _SSL_recv (SSL * ssl, char *buf, int len)
 		errno = EAGAIN;
 		break;
 	case SSL_ERROR_SSL:
-		/* ??? */
 		__SSL_fill_err_buf ("SSL_read");
-		fprintf (stderr, "%s\n", err_buf);
+		g_warning ("%s", err_buf);
 		break;
 	case SSL_ERROR_SYSCALL:
-		/* ??? */
 		if (!would_block ())
-			perror ("SSL_read/read");
+			g_warning ("SSL_read/read: %s", g_strerror (errno));
 		break;
 	case SSL_ERROR_ZERO_RETURN:
 		/* fprintf(stdeerr, "SSL closed on read\n"); */
@@ -300,8 +282,11 @@ _SSL_socket (SSL_CTX *ctx, int sd)
 	SSL *ssl;
 
 	if (!(ssl = SSL_new (ctx)))
-		/* FATAL */
-		__SSL_critical_error ("SSL_new");
+	{
+		__SSL_fill_err_buf ("SSL_new");
+		g_warning ("SSL critical error: %s", err_buf);
+		return NULL;
+	}
 
 	SSL_set_fd (ssl, sd);
 	SSL_set_connect_state (ssl);
