@@ -279,6 +279,9 @@ def main() -> int:
 
     if bad:
         print("DCC_SEND_LISTENER_HIJACK_SECURITY_POC=FAIL")
+        print("--- Ditrigon Output ---")
+        print(output)
+        print("-----------------------")
         return 1
 
     print("DCC_SEND_LISTENER_HIJACK_REGRESSION=PASS")
