@@ -1415,6 +1415,32 @@ process_named_msg (session *sess, char *type, char *word[], char *word_eol[],
 		}
 	}
 
+	else if (len == 8)
+	{
+		if (!strncasecmp (type, "MARKREAD", 8))
+		{
+			session *target_sess = NULL;
+			char *to = word[3];
+			if (*to)
+			{
+				if (strchr (serv->chantypes, to[0]) == NULL
+					&& strchr (serv->nick_prefixes, to[0]) != NULL)
+					to++;
+					
+				if (is_channel (serv, to))
+					target_sess = find_channel (serv, to);
+				else if (!rfc_casecmp (to, serv->nick))
+					target_sess = find_dialog (serv, nick);
+				else
+					target_sess = find_dialog (serv, to);
+					
+				if (target_sess)
+					inbound_markread (target_sess, to, tags_data);
+			}
+			return;
+		}
+	}
+
 garbage:
 	/* unknown message */
 	PrintTextTimeStampf (sess, tags_data->timestamp, "GARBAGE: %s\n", word_eol[1]);

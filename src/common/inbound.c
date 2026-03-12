@@ -1732,6 +1732,12 @@ inbound_toggle_caps (server *serv, const char *extensions_str, gboolean enable)
 			serv->have_labeled_response = enable;
 		else if (!strcmp (extension, "draft/file-upload"))
 			serv->have_file_upload = enable;
+		else if (!strcmp (extension, "soju.im/read-receipts"))
+			serv->have_read_receipts = enable;
+		else if (!strcmp (extension, "soju.im/search"))
+			serv->have_soju_search = enable;
+		else if (!strcmp (extension, "soju.im/network"))
+			serv->have_soju_network = enable;
 		else if (!strcmp (extension, "sasl"))
 		{
 			serv->have_sasl = enable;
@@ -1811,6 +1817,10 @@ static const char * const supported_caps[] = {
 
 	/* Solanum */
 	"solanum.chat/identify-msg",
+	/* SOJU */
+	"soju.im/read-receipts",
+	"soju.im/search",
+	"soju.im/network",
 };
 
 static int
@@ -2316,7 +2326,22 @@ inbound_batch (session *sess, char *id, char *type, const message_tags_data *tag
 			g_hash_table_remove (serv->batch_types, id + 1);
 		}
 	}
-}void
+}
+
+void
+inbound_markread (session *sess, const char *target, const message_tags_data *tags_data)
+{
+	if (!sess)
+		return;
+
+	/* Clear unread status */
+	sess->tab_state = TAB_STATE_NONE;
+
+	fe_set_tab_color (sess, FE_COLOR_NONE);
+	fe_session_sidebar_update (sess);
+}
+
+void
 inbound_filehost (server *serv, char *word[], const message_tags_data *tags_data)
 {
 	/* RPL_FILEHOST (754): <nick> <filename> <url> [headers] */

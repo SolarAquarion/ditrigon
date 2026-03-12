@@ -592,6 +592,9 @@ typedef struct server
 	unsigned int inside_chathistory:1;	/* currently replaying history */
 	unsigned int have_sasl:1;		/* SASL capability */
 	unsigned int have_batch:1;		/* cap batch */
+	unsigned int have_read_receipts:1; /* cap soju.im/read-receipts */
+	unsigned int have_soju_search:1;   /* cap soju.im/search */
+	unsigned int have_soju_network:1;  /* cap soju.im/network */
 	unsigned int have_labeled_response:1;	/* cap labeled-response */
 	unsigned int have_file_upload:1; /* cap draft/file-upload */
 	unsigned int have_except:1;	/* ban exemptions +e */
