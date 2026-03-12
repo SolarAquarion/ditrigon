@@ -1081,19 +1081,19 @@ set_showval (session *sess, const struct prefs *var, char *tbuf)
 	switch (var->type)
 	{
 		case TYPE_STR:
-			sprintf (tbuf + len, "\0033:\017 %s\n", (char *) &prefs + var->offset);
+			g_snprintf (tbuf + len, 512 - len, "\0033:\017 %s\n", (char *) &prefs + var->offset);
 			break;
 		case TYPE_INT:
-			sprintf (tbuf + len, "\0033:\017 %d\n", *((int *) &prefs + var->offset));
+			g_snprintf (tbuf + len, 512 - len, "\0033:\017 %d\n", *((int *) &prefs + var->offset));
 			break;
 		case TYPE_BOOL:
 			if (*((int *) &prefs + var->offset))
 			{
-				sprintf (tbuf + len, "\0033:\017 %s\n", "ON");
+				g_snprintf (tbuf + len, 512 - len, "\0033:\017 %s\n", "ON");
 			}
 			else
 			{
-				sprintf (tbuf + len, "\0033:\017 %s\n", "OFF");
+				g_snprintf (tbuf + len, 512 - len, "\0033:\017 %s\n", "OFF");
 			}
 			break;
 	}

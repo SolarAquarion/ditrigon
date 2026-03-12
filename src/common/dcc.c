@@ -921,7 +921,7 @@ dcc_read (GIOChannel *source, GIOCondition condition, struct DCC *dcc)
 			dcc_close (dcc, STAT_DONE, FALSE);
 			dcc_calc_average_cps (dcc);	/* this must be done _after_ dcc_close, or dcc_remove_from_sum will see the wrong value in dcc->cps */
 			/* cppcheck-suppress deallocuse */
-			sprintf (buf, "%" G_GINT64_FORMAT, dcc->cps);
+			g_snprintf (buf, sizeof (buf), "%" G_GINT64_FORMAT, dcc->cps);
 			EMIT_SIGNAL (XP_TE_DCCRECVCOMP, dcc->serv->front_session,
 							 dcc->file, dcc->destfile, dcc->nick, buf, 0);
 			return TRUE;
@@ -1697,7 +1697,7 @@ dcc_handle_new_ack (struct DCC *dcc)
 		dcc_close (dcc, STAT_DONE, FALSE);
 		dcc_calc_average_cps (dcc);	/* this must be done _after_ dcc_close, or dcc_remove_from_sum will see the wrong value in dcc->cps */
 		/* cppcheck-suppress deallocuse */
-		sprintf (buf, "%" G_GINT64_FORMAT, dcc->cps);
+		g_snprintf (buf, sizeof (buf), "%" G_GINT64_FORMAT, dcc->cps);
 		EMIT_SIGNAL (XP_TE_DCCSENDCOMP, dcc->serv->front_session,
 						 file_part (dcc->file), dcc->nick, buf, NULL, 0);
 		done = TRUE;
@@ -2732,20 +2732,16 @@ dcc_add_file (session *sess, char *file, guint64 size, int port, char *nick, gui
 	{
 		dcc->file = g_strdup (file);
 
-		dcc->destfile = g_malloc (dcc_dir_len + strlen (nick) + strlen (file) + 5);
-		dcc->destfile[0] = '\0';
-		if (dcc_dir_len > 0)
-		{
-			strcat (dcc->destfile, prefs.hex_dcc_dir);
-			if (prefs.hex_dcc_dir[dcc_dir_len - 1] != G_DIR_SEPARATOR)
-				strcat (dcc->destfile, G_DIR_SEPARATOR_S);
-		}
 		if (prefs.hex_dcc_save_nick)
-		{
-			strcat (dcc->destfile, nick);
-			strcat (dcc->destfile, ".");
-		}
-		strcat (dcc->destfile, file);
+			dcc->destfile = g_strdup_printf ("%s%s%s.%s",
+							prefs.hex_dcc_dir,
+							(dcc_dir_len > 0 && prefs.hex_dcc_dir[dcc_dir_len - 1] != G_DIR_SEPARATOR) ? G_DIR_SEPARATOR_S : "",
+							nick, file);
+		else
+			dcc->destfile = g_strdup_printf ("%s%s%s",
+							prefs.hex_dcc_dir,
+							(dcc_dir_len > 0 && prefs.hex_dcc_dir[dcc_dir_len - 1] != G_DIR_SEPARATOR) ? G_DIR_SEPARATOR_S : "",
+							file);
 
 		dcc->resumable = 0;
 		dcc->pos = 0;
@@ -2777,7 +2773,7 @@ dcc_add_file (session *sess, char *file, guint64 size, int port, char *nick, gui
 		} else
 			fe_dcc_add (dcc);
 	}
-	sprintf (tbuf, "%" G_GUINT64_FORMAT, size);
+	g_snprintf (tbuf, sizeof (tbuf), "%" G_GUINT64_FORMAT, size);
 	g_snprintf (tbuf + 24, 300, "%s:%d", net_ip (addr), port);
 	EMIT_SIGNAL (XP_TE_DCCSENDOFFER, sess->server->front_session, nick,
 					 file, tbuf, tbuf + 24, 0);
@@ -2907,7 +2903,7 @@ handle_dcc (struct session *sess, char *nick, char *word[], char *word_eol[],
 
 				dcc->serv->p_ctcp (dcc->serv, dcc->nick, tbuf);
 			}
-			sprintf (tbuf, "%" G_GUINT64_FORMAT, dcc->pos);
+			g_snprintf (tbuf, sizeof (tbuf), "%" G_GUINT64_FORMAT, dcc->pos);
 			EMIT_SIGNAL_TIMESTAMP (XP_TE_DCCRESUMEREQUEST, sess, nick,
 										  file_part (dcc->file), tbuf, NULL, 0,
 										  tags_data->timestamp);

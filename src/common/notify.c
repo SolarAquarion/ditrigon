@@ -375,7 +375,7 @@ notify_flush_watches (server * serv, GSList *from, GSList *end)
 	GSList *list;
 	struct notify *notify;
 
-	serv->supports_monitor ? strcpy (tbuf, "MONITOR + ") : strcpy (tbuf, "WATCH");
+	serv->supports_monitor ? g_strlcpy (tbuf, "MONITOR + ", sizeof (tbuf)) : g_strlcpy (tbuf, "WATCH", sizeof (tbuf));
 
 	list = from;
 	while (list != end)
@@ -576,7 +576,7 @@ notify_showlist (struct session *sess, const message_tags_data *tags_data)
 	}
 	if (i)
 	{
-		sprintf (outbuf, "%d", i);
+		g_snprintf (outbuf, sizeof (outbuf), "%d", i);
 		EMIT_SIGNAL_TIMESTAMP (XP_TE_NOTIFYNUMBER, sess, outbuf, NULL, NULL, NULL,
 									  0, tags_data->timestamp);
 	} else

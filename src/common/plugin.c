@@ -668,14 +668,14 @@ plugin_emit_keypress (session *sess, unsigned int state, unsigned int keyval, gu
 	if (!hook_list)
 		return 0;
 
-	sprintf (keyval_str, "%u", keyval);
-	sprintf (state_str, "%u", state);
+	g_snprintf (keyval_str, sizeof (keyval_str), "%u", keyval);
+	g_snprintf (state_str, sizeof (state_str), "%u", state);
 	if (!key)
 		len = 0;
 	else
 		len = g_unichar_to_utf8 (key, key_str);
 	key_str[len] = '\0';
-	sprintf (len_str, "%d", len);
+	g_snprintf (len_str, sizeof (len_str), "%d", len);
 
 	word[0] = "Key Press";
 	word[1] = keyval_str;
