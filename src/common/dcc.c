@@ -446,10 +446,18 @@ dcc_close (struct DCC *dcc, enum dcc_state dccstat, int destroy)
 
 	dcc_remove_from_sum (dcc);
 
-	if (dcc->fp != -1)
+	if (dcc->file_istream || dcc->file_ostream)
 	{
-		close (dcc->fp);
-		dcc->fp = -1;
+		if (dcc->file_istream)
+		{
+			g_input_stream_close (G_INPUT_STREAM (dcc->file_istream), NULL, NULL);
+			g_clear_object (&dcc->file_istream);
+		}
+		if (dcc->file_ostream)
+		{
+			g_output_stream_close (G_OUTPUT_STREAM (dcc->file_ostream), NULL, NULL);
+			g_clear_object (&dcc->file_ostream);
+		}
 
 		if(dccstat == STAT_DONE)
 		{
@@ -733,7 +741,7 @@ dcc_read (GIOChannel *source, GIOCondition condition, struct DCC *dcc)
 	int n;
 	gboolean need_ack = FALSE;
 
-	if (dcc->fp == -1)
+	if (!dcc->file_ostream)
 	{
 
 		/* try to create the download dir (even if it exists, no harm) */
@@ -742,7 +750,8 @@ dcc_read (GIOChannel *source, GIOCondition condition, struct DCC *dcc)
 		if (dcc->resumable)
 		{
 			gchar *filename_fs = g_filename_from_utf8 (dcc->destfile, -1, NULL, NULL, NULL);
-			dcc->fp = g_open (filename_fs, O_WRONLY | O_APPEND | OFLAGS | DCC_OPEN_NOFOLLOW, 0);
+			g_autoptr(GFile) file = g_file_new_for_path (filename_fs);
+			dcc->file_ostream = g_file_append_to (file, G_FILE_CREATE_NONE, NULL, NULL);
 			g_free (filename_fs);
 
 			dcc->pos = dcc->resumable;
@@ -771,13 +780,12 @@ dcc_read (GIOChannel *source, GIOCondition condition, struct DCC *dcc)
 			}
 
 			filename_fs = g_filename_from_utf8 (dcc->destfile, -1, NULL, NULL, NULL);
-			dcc->fp = g_open (filename_fs,
-							  OFLAGS | O_TRUNC | O_WRONLY | O_CREAT | DCC_OPEN_NOFOLLOW,
-							  prefs.hex_dcc_permissions);
+			g_autoptr(GFile) file = g_file_new_for_path (filename_fs);
+			dcc->file_ostream = g_file_replace (file, NULL, FALSE, G_FILE_CREATE_NONE, NULL, NULL);
 			g_free (filename_fs);
 		}
 	}
-	if (dcc->fp == -1)
+	if (!dcc->file_ostream)
 	{
 		/* the last executed function is open(), errno should be valid */
 		EMIT_SIGNAL (XP_TE_DCCFILEERR, dcc->serv->front_session, dcc->destfile,
@@ -820,10 +828,12 @@ dcc_read (GIOChannel *source, GIOCondition condition, struct DCC *dcc)
 			return TRUE;
 		}
 
-		if (!write_all (dcc->fp, buf, (size_t)n)) /* could be out of hdd space */
+		gsize bytes_written;
+		if (!g_output_stream_write_all (G_OUTPUT_STREAM (dcc->file_ostream), buf, n, &bytes_written, NULL, &error)) /* could be out of hdd space */
 		{
 			EMIT_SIGNAL (XP_TE_DCCRECVERR, dcc->serv->front_session, dcc->file,
-						 dcc->destfile, dcc->nick, errorstring (errno), 0);
+						 dcc->destfile, dcc->nick, error ? error->message : "Write failed", 0);
+			g_clear_error (&error);
 			if (need_ack && !dcc_send_ack (dcc))
 				return TRUE;
 			dcc_close (dcc, STAT_FAILED, FALSE);
@@ -1086,16 +1096,16 @@ dcc_send_data (GIOChannel *source, GIOCondition condition, struct DCC *dcc)
 
 	buf = g_malloc (prefs.hex_dcc_blocksize);
 
-	if (lseek (dcc->fp, dcc->pos, SEEK_SET) == (off_t)-1)
+	if (!g_seekable_seek (G_SEEKABLE (dcc->file_istream), dcc->pos, G_SEEK_SET, NULL, &error))
 	{
-		err = errno;
+		err = EIO;
 		goto abortit;
 	}
 
-	len = read (dcc->fp, buf, prefs.hex_dcc_blocksize);
+	len = g_input_stream_read (G_INPUT_STREAM (dcc->file_istream), buf, prefs.hex_dcc_blocksize, NULL, &error);
 	if (len < 0)
 	{
-		err = errno;
+		err = EIO;
 		goto abortit;
 	}
 	if (len == 0)
@@ -1606,11 +1616,14 @@ dcc_send (struct session *sess, char *to, char *filename, gint64 maxcps, int pas
 	dcc->dccstat = STAT_QUEUED;
 	dcc->size = file_size;
 	dcc->type = TYPE_SEND;
-	dcc->fp = g_open (filename_fs, OFLAGS | O_RDONLY, 0);
-
-	if (dcc->fp == -1)
 	{
-		PrintText (sess, "Cannot send directories or empty files.\n");
+		g_autoptr(GFile) ffile = g_file_new_for_path (filename_fs);
+		dcc->file_istream = g_file_read (ffile, NULL, NULL);
+	}
+
+	if (!dcc->file_istream)
+	{
+		PrintText (sess, "Cannot open file for reading.\n");
 
 		dcc_close (dcc, 0, TRUE); /* dcc_close will free dcc->file */
 
@@ -1945,7 +1958,6 @@ new_dcc (void)
 {
 	struct DCC *dcc = g_new0 (struct DCC, 1);
 	dcc->sok = -1;
-	dcc->fp = -1;
 	dcc_list = g_slist_prepend (dcc_list, dcc);
 	if (timeout_timer == 0)
 	{
@@ -2304,7 +2316,7 @@ handle_dcc (struct session *sess, char *nick, char *word[], char *word_eol[],
 			{
 				dcc->pos = dcc->resumable;
 				dcc->ack = dcc->resumable;
-				lseek (dcc->fp, dcc->pos, SEEK_SET);
+				g_seekable_seek (G_SEEKABLE (dcc->file_istream), dcc->pos, G_SEEK_SET, NULL, NULL);
 
 				/* Checking if dcc is passive and if filename contains spaces */
 				if (dcc->pasvid)

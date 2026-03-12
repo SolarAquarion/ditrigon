@@ -50,15 +50,15 @@ struct DCC
 	struct dcc_chat *dccchat;
 	struct proxy_state *proxy;
 	guint32 addr;					/* the 32bit IP number, host byte order */
-	int fp;							/* file pointer */
+	GFileInputStream *file_istream;
+	GFileOutputStream *file_ostream;
 	int sok;
 	GSocket *gsocket;
 	GInputStream *istream;
 	GOutputStream *ostream;
 	int iotag;						/* reading io tag */
 	int wiotag;						/* writing/sending io tag */
-	int port;
-	int pasvid;						/* mIRC's passive DCC id */
+	int port;	int pasvid;						/* mIRC's passive DCC id */
 	gint64 cps;
 	int resume_error;
 	int resume_errno;
