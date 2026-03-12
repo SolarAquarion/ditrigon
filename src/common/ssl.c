@@ -27,7 +27,6 @@
 #include <openssl/err.h>		  /* ERR_() */
 #include <openssl/x509v3.h>
 #include "config.h"
-#include <time.h>				  /* asctime() */
 #include <string.h>				  /* strncpy() */
 #include "ssl.h"				  /* struct cert_info */
 
@@ -81,21 +80,17 @@ _SSL_context_init (void (*info_cb_func))
 {
 	SSL_CTX *ctx;
 
-	SSLeay_add_ssl_algorithms ();
-	SSL_load_error_strings ();
-	ctx = SSL_CTX_new (SSLv23_client_method ());
+	ctx = SSL_CTX_new (TLS_client_method ());
+
+	/* Enforce TLS 1.2 as minimum protocol version */
+	SSL_CTX_set_min_proto_version (ctx, TLS1_2_VERSION);
 
 	SSL_CTX_set_session_cache_mode (ctx, SSL_SESS_CACHE_BOTH);
 	SSL_CTX_set_timeout (ctx, 300);
-	SSL_CTX_set_options (ctx, SSL_OP_NO_SSLv2|SSL_OP_NO_SSLv3
-							  |SSL_OP_NO_COMPRESSION
+	SSL_CTX_set_options (ctx, SSL_OP_NO_COMPRESSION
 							  |SSL_OP_SINGLE_DH_USE|SSL_OP_SINGLE_ECDH_USE
 							  |SSL_OP_NO_TICKET
 							  |SSL_OP_CIPHER_SERVER_PREFERENCE);
-
-#if OPENSSL_VERSION_NUMBER >= 0x00908000L && !defined (OPENSSL_NO_COMP) /* workaround for OpenSSL 0.9.8 */
-	sk_SSL_COMP_zero(SSL_COMP_get_compression_methods());
-#endif
 
 	/* used in SSL_connect(), SSL_accept() */
 	SSL_CTX_set_info_callback (ctx, info_cb_func);
@@ -303,23 +298,13 @@ SSL *
 _SSL_socket (SSL_CTX *ctx, int sd)
 {
 	SSL *ssl;
-	const SSL_METHOD *method;
 
 	if (!(ssl = SSL_new (ctx)))
 		/* FATAL */
 		__SSL_critical_error ("SSL_new");
 
 	SSL_set_fd (ssl, sd);
-
-#ifndef HAVE_SSL_CTX_GET_SSL_METHOD
-	method = ctx->method;
-#else
-	method = SSL_CTX_get_ssl_method (ctx);
-#endif
-	if (method == SSLv23_client_method())
-		SSL_set_connect_state (ssl);
-	else
-	        SSL_set_accept_state(ssl);
+	SSL_set_connect_state (ssl);
 
 	return (ssl);
 }
@@ -353,14 +338,6 @@ _SSL_close (SSL * ssl)
 {
 	SSL_set_shutdown (ssl, SSL_SENT_SHUTDOWN | SSL_RECEIVED_SHUTDOWN);
 	SSL_free (ssl);
-#ifdef HAVE_ERR_REMOVE_THREAD_STATE
-#if OPENSSL_VERSION_NUMBER >= 0x10000000L && OPENSSL_VERSION_NUMBER < 0x10100000L
-	/* OpenSSL handles this itself in 1.1+ and this is a no-op */
-	ERR_remove_thread_state (NULL);
-#endif
-#else
-	ERR_remove_state (0);
-#endif
 }
 
 int
