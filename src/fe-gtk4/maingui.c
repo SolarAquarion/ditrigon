@@ -30,6 +30,7 @@ static GtkWidget *input_composer_box;
 static GtkWidget *input_nick_box;
 static GtkWidget *input_nick_button;
 static GtkWidget *input_send_button;
+static GtkWidget *input_emoji_button;
 static GtkWidget *main_search_bar;
 static GtkWidget *main_search_entry;
 static guint typing_paused_timeout = 0;
@@ -189,6 +190,19 @@ static GtkWidget *
 maingui_ui_get_widget_typed (GtkBuilder *builder, const char *id, GType type)
 {
 	return GTK_WIDGET (maingui_ui_get_object_typed (builder, id, type));
+}
+
+static void
+emoji_picked_cb (GtkEmojiChooser *chooser, const char *text, gpointer userdata)
+{
+	(void) chooser;
+	(void) userdata;
+	if (command_entry)
+	{
+		int pos = gtk_editable_get_position (GTK_EDITABLE (command_entry));
+		gtk_editable_insert_text (GTK_EDITABLE (command_entry), text, -1, &pos);
+		gtk_editable_set_position (GTK_EDITABLE (command_entry), pos);
+	}
 }
 
 static void
@@ -1317,6 +1331,20 @@ fe_gtk4_create_main_window (void)
 	gtk_widget_set_valign (input_send_button, GTK_ALIGN_CENTER);
 	g_signal_connect (input_send_button, "clicked", G_CALLBACK (entry_send_cb), NULL);
 	entry_update_send_sensitivity ();
+
+	input_emoji_button = gtk_menu_button_new ();
+	gtk_menu_button_set_icon_name (GTK_MENU_BUTTON (input_emoji_button), "face-smile-symbolic");
+	gtk_widget_add_css_class (input_emoji_button, "flat");
+	gtk_widget_add_css_class (input_emoji_button, "circular");
+	gtk_widget_set_valign (input_emoji_button, GTK_ALIGN_CENTER);
+	gtk_widget_set_tooltip_text (input_emoji_button, _("Insert Emoji"));
+
+	GtkWidget *emoji_chooser = gtk_emoji_chooser_new ();
+	gtk_menu_button_set_popover (GTK_MENU_BUTTON (input_emoji_button), emoji_chooser);
+	g_signal_connect (emoji_chooser, "emoji-picked", G_CALLBACK (emoji_picked_cb), NULL);
+
+	if (input_composer_box)
+		gtk_box_insert_child_after (GTK_BOX (input_composer_box), input_emoji_button, command_entry_slot);
 
 	entry_update_nick (current_tab);
 
