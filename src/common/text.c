@@ -19,12 +19,9 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <ctype.h>
-#include <time.h>
 #include <sys/types.h>
 #include <fcntl.h>
 #include <sys/stat.h>
-#include <errno.h>
 
 #include <unistd.h>
 #include <sys/mman.h>
@@ -39,7 +36,6 @@
 #include "outbound.h"
 #include "hexchatc.h"
 #include "text.h"
-#include "typedef.h"
 
 #ifdef USE_LIBCANBERRA
 #include <canberra.h>
@@ -1742,7 +1738,7 @@ pevent_check_all_loaded (void)
 }
 
 void
-load_text_events ()
+load_text_events (void)
 {
 	memset (&pntevts_text, 0, sizeof (char *) * (NUM_XP));
 	memset (&pntevts, 0, sizeof (char *) * (NUM_XP));
@@ -2327,7 +2323,7 @@ sound_load_event (char *evt, char *file)
 }
 
 void
-sound_load ()
+sound_load (void)
 {
 	int fd;
 	char buf[512];
@@ -2360,7 +2356,7 @@ sound_load ()
 }
 
 void
-sound_save ()
+sound_save (void)
 {
 	int fd, i;
 	char buf[512];
